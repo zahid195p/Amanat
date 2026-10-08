@@ -69,6 +69,9 @@ jobs:
           curl -s -X POST -H "$H" -H 'content-type: application/json' $API -d "{\"name\":\"$WANT\"}" | jq -c '{success, errors}'
           curl -s -H "$H" $API | jq -c '.result[] | {name, status, validation: .validation_data.status}'
           echo "DNS now for $WANT: $(dig +short $WANT | tr '\n' ' ')"
+          echo "CNAME at Namecheap: $(dig +short CNAME $WANT @dns1.registrar-servers.com | tr '\n' ' ')"
+          echo "All records at Namecheap for $WANT: $(dig +short ANY $WANT @dns1.registrar-servers.com | tr '\n' ' ')"
+          echo "http: $(curl -s -o /dev/null -w '%{http_code}' -m 10 http://$WANT/) https: $(curl -s -o /dev/null -w '%{http_code}' -m 10 https://$WANT/)"
       - name: Smoke test live site
         if: steps.tok.outputs.skip != '1'
         run: |
