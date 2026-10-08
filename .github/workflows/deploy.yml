@@ -54,12 +54,28 @@ jobs:
       - name: Deploy
         if: steps.tok.outputs.skip != '1'
         run: npx wrangler pages deploy dist --project-name amanat --branch main --commit-dirty=true
-      - name: Custom domain amanat.fazool.skin
+      - name: Custom domain
         if: steps.tok.outputs.skip != '1'
         run: |
           API=https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/amanat/domains
-          curl -s -X POST -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'content-type: application/json' $API -d '{"name":"amanat.fazool.skin"}' | jq -c '{success, errors}'
-          curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" $API | jq -c '.result[] | {name, status, verification: .verification_data, validation: .validation_data}'
-          echo "Nameservers of fazool.skin:"; dig +short NS fazool.skin
-          echo "Current amanat.fazool.skin:"; dig +short amanat.fazool.skin
-          echo "Site: https://$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/amanat | jq -r '.result.subdomain')"
+          H="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          for d in fazol.skin fazool.skin; do echo "NS $d: $(dig +short NS $d | tr '\n' ' ')"; done
+          ROOT=""; for d in fazol.skin fazool.skin; do [ -n "$(dig +short NS $d)" ] && { ROOT=$d; break; }; done
+          [ -z "$ROOT" ] && { echo "::warning::Neither fazol.skin nor fazool.skin resolves"; exit 0; }
+          WANT="amanat.$ROOT"; echo "Using $WANT"
+          for d in $(curl -s -H "$H" $API | jq -r '.result[].name'); do
+            [ "$d" != "$WANT" ] && curl -s -X DELETE -H "$H" "$API/$d" >/dev/null && echo "removed $d"
+          done
+          curl -s -X POST -H "$H" -H 'content-type: application/json' $API -d "{\"name\":\"$WANT\"}" | jq -c '{success, errors}'
+          curl -s -H "$H" $API | jq -c '.result[] | {name, status, validation: .validation_data.status}'
+          echo "DNS now for $WANT: $(dig +short $WANT | tr '\n' ' ')"
+      - name: Smoke test live site
+        if: steps.tok.outputs.skip != '1'
+        run: |
+          SITE=https://$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/amanat | jq -r '.result.subdomain')
+          sleep 10
+          echo "Site: $SITE"
+          echo "home: $(curl -s -o /dev/null -w '%{http_code}' $SITE/)"
+          echo "sw: $(curl -s -o /dev/null -w '%{http_code}' $SITE/sw.js)"
+          echo "setup: $(curl -s $SITE/api/setup)"
+          echo "login bad: $(curl -s -X POST -H 'content-type: application/json' $SITE/api/login -d '{"profileId":"nobody","code":"1234"}')"
