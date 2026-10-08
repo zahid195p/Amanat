@@ -12,11 +12,17 @@
 - Bugs B1-B17 addressed. Features 1-10,12,13,15-18,21-27,32,33,36-38.
 - Local end-to-end test (tests/e2e.mjs) against emulators: 38/38 pass, incl. offline reload + sync between 2 devices.
 
+## Live (2026-10-08)
+- Firebase project `amanat-zahid` (Spark, Firestore asia-south1, rules deployed, Auth on).
+- Cloudflare Pages project `amanat` → https://amanat-2oq.pages.dev, deployed by GitHub Actions on push; KV `amanat`; secrets copied from GitHub repo secrets.
+- Domain is **fazol.skin** (Namecheap DNS), not fazool. Custom domain `amanat.fazol.skin` added in Pages; needs CNAME amanat → amanat-2oq.pages.dev at Namecheap.
+- Gemini: `gemini-flash-latest` (= gemini-3.8-flash on 2026-10-08), fallback `gemini-flash-lite-latest`.
+- Smoke test in deploy job: home 200, sw 200, /api/setup configured, /api/login answers.
+
 ## Next
-- Zahid: Firebase + Cloudflare setup (README).
-- Paste Firebase web config into src/firebase-config.js, deploy preview, Zahid tests.
+- Zahid: Namecheap CNAME, first setup on the site, add Tayyab profile.
+- Rotate the Cloudflare token (it was pasted in chat).
 - Rules check via console as sorter (planned test), Gemini model check once key exists.
-- Small parser glitch: "TCS / Leopards" on its own line leaves a stray "s" in the address.
 
 ## Decisions
 - Gemini model: GEMINI_MODEL env, default `gemini-flash-latest`, falls back to `gemini-2.5-flash`. Free-tier limits could not be verified from here (Google docs blocked); roughly 10-15 requests/min, 250-1500/day.
