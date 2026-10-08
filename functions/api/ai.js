@@ -7,7 +7,7 @@
 import { json, fail, body, verifyUser } from '../../server/lib.js';
 import { PARSE_PROMPT, SERVICES } from '../../src/parse.js';
 
-const FALLBACK_MODELS = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest'];
+const FALLBACK_MODELS = ['gemini-flash-latest', 'gemini-flash-lite-latest'];
 const ADDR = {
   type: 'OBJECT',
   properties: {
@@ -49,12 +49,14 @@ async function gemini(env, parts, schema) {
       }),
     });
     if (r.status === 404 || r.status === 400) { last = { status: r.status, text: await r.text() }; if (r.status === 404) continue; break; }
-    if (r.status === 429) return { error: 'rate_limited', status: 429 };
+    if (r.status === 429) { last = { status: 429 }; continue; } // try the next model's own free quota
+    if (r.status >= 500) { last = { status: r.status, text: await r.text() }; continue; } // busy: try the lighter model
     if (!r.ok) return { error: 'ai_error', status: 502, detail: (await r.text()).slice(0, 300) };
     const d = await r.json();
     const txt = d?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
     try { return { data: JSON.parse(txt), model }; } catch { return { error: 'bad_answer', status: 502 }; }
   }
+  if (last?.status === 429) return { error: 'rate_limited', status: 429 };
   return { error: 'ai_error', status: 502, detail: last?.text?.slice(0, 300) };
 }
 
