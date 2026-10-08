@@ -1,7 +1,7 @@
 # Builds Amanat and deploys it to Cloudflare Pages (project "amanat").
 # Needs GitHub repo secrets (Settings > Secrets and variables > Actions):
 #   CLOUDFLARE_API_TOKEN (required), and FIREBASE_SERVICE_ACCOUNT, GEMINI_API_KEY,
-#   SETUP_KEY, which are copied into Cloudflare's encrypted secret store on each run.
+#   which are copied into Cloudflare's encrypted secret store on each run.
 name: Deploy
 on:
   push:
@@ -45,13 +45,21 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          SETUP_KEY: ${{ secrets.SETUP_KEY }}
         run: |
           set -e
-          for k in FIREBASE_SERVICE_ACCOUNT GEMINI_API_KEY SETUP_KEY; do
+          for k in FIREBASE_SERVICE_ACCOUNT GEMINI_API_KEY; do
             v="${!k}"; [ -z "$v" ] && { echo "$k not set, skipped"; continue; }
             printf '%s' "$v" | npx wrangler pages secret put "$k" --project-name amanat >/dev/null && echo "set $k"
           done
       - name: Deploy
         if: steps.tok.outputs.skip != '1'
         run: npx wrangler pages deploy dist --project-name amanat --branch main --commit-dirty=true
+      - name: Custom domain amanat.fazool.skin
+        if: steps.tok.outputs.skip != '1'
+        run: |
+          API=https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/amanat/domains
+          curl -s -X POST -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'content-type: application/json' $API -d '{"name":"amanat.fazool.skin"}' | jq -c '{success, errors}'
+          curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" $API | jq -c '.result[] | {name, status, verification: .verification_data, validation: .validation_data}'
+          echo "Nameservers of fazool.skin:"; dig +short NS fazool.skin
+          echo "Current amanat.fazool.skin:"; dig +short amanat.fazool.skin
+          echo "Site: https://$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/amanat | jq -r '.result.subdomain')"

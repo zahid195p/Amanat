@@ -1,10 +1,11 @@
 // First-run setup. Works only while no admin exists, and only with SETUP_KEY.
 // GET  /api/setup -> {needed, configured}
 // POST /api/setup {setupKey, profileId, name, code} -> {token}
-import { json, fail, body, validId, validCode, hashCode, putProf, mintCustomToken, cleanPerms } from '../../server/lib.js';
+import { json, fail, body, validId, validCode, hashCode, checkCode, putProf, mintCustomToken, cleanPerms } from '../../server/lib.js';
+import { SETUP_KEY_HASH } from '../../server/setup-key.js';
 
 function configured(env) {
-  return { kv: !!env.AMANAT_KV, serviceAccount: !!env.FIREBASE_SERVICE_ACCOUNT, setupKey: !!env.SETUP_KEY, gemini: !!env.GEMINI_API_KEY };
+  return { kv: !!env.AMANAT_KV, serviceAccount: !!env.FIREBASE_SERVICE_ACCOUNT, setupKey: !!(env.SETUP_KEY || SETUP_KEY_HASH), gemini: !!env.GEMINI_API_KEY };
 }
 
 export async function onRequestGet({ env }) {
@@ -18,7 +19,8 @@ export async function onRequestPost({ request, env }) {
   if (!c.kv || !c.serviceAccount || !c.setupKey) return fail(503, 'Setup is not finished on Cloudflare yet.', { configured: c });
   if (await env.AMANAT_KV.get('setup:done')) return fail(409, 'Amanat is already set up. Log in instead.');
   const { setupKey, profileId, name, code } = await body(request);
-  if (setupKey !== env.SETUP_KEY) return fail(401, 'The setup key is not right.');
+  const keyOk = env.SETUP_KEY ? setupKey === env.SETUP_KEY : await checkCode(String(setupKey || ''), SETUP_KEY_HASH);
+  if (!keyOk) return fail(401, 'The setup key is not right.');
   if (!validId(profileId) || !String(name || '').trim()) return fail(400, 'Enter a name.');
   if (!validCode(code)) return fail(400, 'The code must be 4 to 64 characters.');
   let token;

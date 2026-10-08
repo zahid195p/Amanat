@@ -90,7 +90,7 @@ function vSetup() {
   <label class="fld"><span>Your name</span><input id="su-name" value="Zahid" autocomplete="name"></label>
   <label class="fld"><span>Choose your code (at least 4 characters)</span><input id="su-code" type="password" autocomplete="new-password"></label>
   <label class="fld"><span>Type it again</span><input id="su-code2" type="password" autocomplete="new-password"></label>
-  <label class="fld"><span>Setup key (the SETUP_KEY you saved in Cloudflare)</span><input id="su-key" type="password" autocomplete="off"></label>
+  <label class="fld"><span>Setup phrase</span><input id="su-key" type="password" autocomplete="off"></label>
   <button class="btn primary wide" data-act="setup" ${S.loggingIn ? 'disabled' : ''}>${S.loggingIn ? 'Setting up…' : 'Set up and open'}</button><div class="status err" id="login-err">${esc(S.loginErr || '')}</div></div>`;
 }
 

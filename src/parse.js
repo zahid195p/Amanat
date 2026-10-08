@@ -19,7 +19,7 @@ export function isMobile(p){ const d=phoneDigits(p); return d.length===11&&d.sta
 export function waNumber(p){ const d=phoneDigits(p); return isMobile(d)?'92'+d.slice(1):''; }
 export function fmtPhone(p){ const s=String(p||''); const d=phoneDigits(s); if(d.length===11&&d.startsWith('03')) return d.slice(0,4)+' '+d.slice(4); return s; }
 
-export const SVC_RE=[[/\btcs\b/i,'TCS'],[/leopard/i,'Leopards'],[/daewoo|\bdivo\b|\bdevo\b|\bdaiwoo\b|\bdewoo\b/i,'Daewoo'],[/faisal\s*movers?|\bfaisal\b/i,'Faisal Movers'],[/in ?drive/i,'InDrive'],[/yango/i,'Yango'],[/\bbike\b|\brider\b/i,'Bike'],[/cargo/i,'Cargo'],[/pick ?up|\bcollect\b/i,'Pickup']];
+export const SVC_RE=[[/\btcs\b/i,'TCS'],[/leopards?/i,'Leopards'],[/daewoo|\bdivo\b|\bdevo\b|\bdaiwoo\b|\bdewoo\b/i,'Daewoo'],[/faisal\s*movers?|\bfaisal\b/i,'Faisal Movers'],[/in ?drive/i,'InDrive'],[/yango/i,'Yango'],[/\bbike\b|\brider\b/i,'Bike'],[/cargo/i,'Cargo'],[/pick ?up|\bcollect\b/i,'Pickup']];
 const ADDR_WORDS=/\d|road|street|st\.|house|shop|market|near|mohall?ah?|colony|town|block|sector|phase|bazaa?r|plaza|gali|chowk|village|tehsil|district|post|cantt|saddar|ward|flat|floor|building|lane|nagar|abad|pura|garden|society|scheme|mall|branch|office|tower|centre|center/i;
 const CITY_RES=[...CITIES].sort((x,y)=>y.length-x.length).map(c=>[c,new RegExp('\\b'+c.replace(/ /g,'\\s*')+'\\b','i')]);
 export function findCity(text){ for(const [c,re] of CITY_RES) if(re.test(text)) return c; return ''; }
