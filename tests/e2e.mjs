@@ -50,12 +50,12 @@ ok(await until(a, () => /bad\.heic/.test(document.body.innerText)), 'HEIC failur
 await a.fill('.card:nth-child(1) .nm', 'black shoes');
 await wait(800);
 await a.click('.card:nth-child(1) .ph'); await a.click('.card:nth-child(2) .ph', { modifiers: ['Shift'] });
-ok(await a.evaluate(() => document.querySelectorAll('.card.sel').length === 2), 'shift-click range select');
+ok(await until(a, () => document.querySelectorAll('.card.sel').length === 2), 'shift-click range select');
 await a.click('#selbar [data-act=selToGroup]');
 await a.click('[data-pg=__new]');
 await a.fill('#gs-raw', 'Qasim Imtiaz\n03161749964\nWasu Road Near Chungi Number 8 Mandi Bahauddin\nTCS / Leopards');
 await a.click('#gs-read');
-ok(await until(a, () => document.querySelector('#gs-phone')?.value === '03161749964' && document.querySelector('#gs-city')?.value === 'Mandi Bahauddin'), 'basic reader fills the fields');
+ok(await until(a, () => document.querySelector('#gs-phone')?.value === '03161749964' && document.querySelector('#gs-city')?.value === 'Mandi Bahauddin', null, 1500), 'basic reader fills the fields instantly');
 await a.click('#gs-save');
 ok(await until(a, () => /Qasim Imtiaz/.test(document.querySelector('.gpanel')?.innerText || '')), 'group made with 2 items');
 await a.click('[data-act=tab][data-v=service]');

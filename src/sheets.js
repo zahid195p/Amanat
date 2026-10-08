@@ -8,7 +8,7 @@ import {
   increment, deleteField, db, STEPS, PERM_LABELS, DEFAULT_PERMS, PROFILE_COLORS, DEFAULT_WA, DEFAULT_TRACK, FREE_BYTES, setDoc,
   commitUndos, auth, signOut, unsubscribeAll,
 } from './core.js';
-import { FIELDS, SERVICES, CITIES, phoneKey, isMobile, waNumber, findPhones } from './parse.js';
+import { FIELDS, SERVICES, CITIES, phoneKey, isMobile, waNumber, findPhones, localParse, fixUp } from './parse.js';
 import { fullPhoto, cachePhoto, compressOne, handleFiles } from './images.js';
 import { api, readText, readBulk, readImage, nameItems, aiAllowed } from './api.js';
 import { ICON, telLinks, pendingBadge } from './views.js';
@@ -61,6 +61,7 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
   const F = (k) => sh.querySelector('#gs-' + k);
   const st = F('st');
   let aiState = null; // {ai, pending}
+  let chips = null;
 
   // Live parts (re-rendered from snapshots).
   const live = () => {
@@ -109,12 +110,38 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
     const all = box.querySelector('[data-useall]'); if (all) all.onclick = () => { diffs.forEach(([k, v]) => (F(k).value = v)); box.innerHTML = ''; };
   };
   if (eg) {
+    // Instant: the offline reader fills the fields at once; AI then corrects them a moment later.
+    let readSeq = 0;
     const read = async () => {
       const t = F('raw').value.trim(); if (!t) return;
-      const b = F('read'); b.disabled = true; st.className = 'status'; st.textContent = aiAllowed() && navigator.onLine ? 'Reading with AI…' : 'Reading…';
-      const r = await readText(t); b.disabled = false; aiState = r; fill(r.data);
+      const seq = ++readSeq;
+      const before = {}; FIELDS.forEach((k) => (before[k] = F(k).value.trim()));
+      fill(fixUp(localParse(t), t));
+      const after = {}; FIELDS.forEach((k) => (after[k] = F(k).value.trim()));
+      const byLocal = FIELDS.filter((k) => !before[k] && after[k]);
+      chips?.();
+      if (!aiAllowed() || !navigator.onLine) {
+        aiState = { ai: false, pending: aiAllowed() };
+        st.className = 'status err';
+        st.textContent = aiAllowed() ? 'Offline: filled in by the basic reader. It will be marked "AI check pending".' : 'Filled in by the basic reader. Check each field.';
+        return;
+      }
+      st.className = 'status'; st.textContent = 'Filled in. Checking with AI…';
+      const r = await readText(t);
+      if (seq !== readSeq) return;
+      aiState = r;
+      if (r.ai) {
+        const diffs = [];
+        for (const k of FIELDS) {
+          const nv = String(r.data[k] || '').trim(); if (!nv) continue;
+          const cur = F(k).value.trim();
+          if (!cur || (byLocal.includes(k) && cur === after[k])) F(k).value = nv; // empty, or untouched since the basic reader
+          else if (cur !== nv) diffs.push([k, nv]);
+        }
+        showDiffs(diffs); checkDup(); chips?.();
+      }
       st.className = 'status' + (r.ai ? '' : ' err');
-      st.textContent = r.ai ? 'Filled in by AI. Check each field, then save.' : r.why === 'offline' ? 'Offline: the basic reader filled it in. It will be marked "AI check pending".' : `AI could not read it (${r.why}). The basic reader filled it in, so check every field.`;
+      st.textContent = r.ai ? 'Checked by AI. Check each field, then save.' : `AI could not check it (${r.why}). The basic reader filled it in, so check every field.`;
     };
     F('read').onclick = read;
     F('raw').addEventListener('paste', () => setTimeout(read, 60));
@@ -129,7 +156,7 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
       } catch (e) { st.className = 'status err'; st.textContent = e.message; }
     };
     // B6: chips toggle and combine with " / ".
-    const chips = () => { const cur = F('service').value.split('/').map((s) => s.trim()).filter(Boolean); sh.querySelectorAll('[data-svc]').forEach((b) => b.classList.toggle('on', cur.includes(b.dataset.svc))); };
+    chips = () => { const cur = F('service').value.split('/').map((s) => s.trim()).filter(Boolean); sh.querySelectorAll('[data-svc]').forEach((b) => b.classList.toggle('on', cur.includes(b.dataset.svc))); };
     sh.querySelectorAll('[data-svc]').forEach((b) => (b.onclick = () => {
       let cur = F('service').value.split('/').map((s) => s.trim()).filter(Boolean); const s = b.dataset.svc;
       cur = cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s];

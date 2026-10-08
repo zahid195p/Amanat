@@ -7,7 +7,9 @@
 import { json, fail, body, verifyUser } from '../../server/lib.js';
 import { PARSE_PROMPT, SERVICES } from '../../src/parse.js';
 
-const FALLBACK_MODELS = ['gemini-flash-latest', 'gemini-flash-lite-latest'];
+// Fast model first (answers in ~0.5-2 s); the bigger flash model is often overloaded and slow.
+const FALLBACK_MODELS = ['gemini-flash-lite-latest', 'gemini-flash-latest'];
+const TIMEOUT_MS = { parse: 12000, bulk: 25000, image: 20000, name: 20000 };
 const ADDR = {
   type: 'OBJECT',
   properties: {
@@ -36,28 +38,31 @@ function dataUrlPart(d) {
 }
 const rulesOnly = () => PARSE_PROMPT.replace(/Reply with only one JSON object[\s\S]*$/, '').trim();
 
-async function gemini(env, parts, schema) {
+async function gemini(env, parts, schema, ms = 15000) {
   const models = [env.GEMINI_MODEL, ...FALLBACK_MODELS].filter((m, i, a) => m && a.indexOf(m) === i);
   let last = null;
   for (const model of models) {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts }],
-        generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: schema },
-      }),
-    });
-    if (r.status === 404 || r.status === 400) { last = { status: r.status, text: await r.text() }; if (r.status === 404) continue; break; }
-    if (r.status === 429) { last = { status: 429 }; continue; } // try the next model's own free quota
-    if (r.status >= 500) { last = { status: r.status, text: await r.text() }; continue; } // busy: try the lighter model
+    let r;
+    try {
+      r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts }],
+          generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: schema },
+        }),
+        signal: AbortSignal.timeout(ms),
+      });
+    } catch (e) { last = { status: 504, text: 'timeout' }; continue; } // too slow: try the next model
+    if (r.status === 429) { last = { status: 429 }; continue; } // this model's free quota is used up: try the next
+    if (r.status >= 500 || r.status === 404) { last = { status: r.status, text: await r.text() }; continue; }
     if (!r.ok) return { error: 'ai_error', status: 502, detail: (await r.text()).slice(0, 300) };
     const d = await r.json();
     const txt = d?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
-    try { return { data: JSON.parse(txt), model }; } catch { return { error: 'bad_answer', status: 502 }; }
+    try { return { data: JSON.parse(txt), model }; } catch { last = { status: 502, text: 'bad_answer' }; }
   }
   if (last?.status === 429) return { error: 'rate_limited', status: 429 };
-  return { error: 'ai_error', status: 502, detail: last?.text?.slice(0, 300) };
+  return { error: 'ai_busy', status: 503, detail: last?.text?.slice(0, 300) };
 }
 
 export async function onRequestPost({ request, env }) {
@@ -71,21 +76,21 @@ export async function onRequestPost({ request, env }) {
   if (b.task === 'parse') {
     const text = String(b.text || '').slice(0, 6000);
     if (!text.trim()) return fail(400, 'No text');
-    out = await gemini(env, [{ text: PARSE_PROMPT + text + '\n"""' }], ADDR);
+    out = await gemini(env, [{ text: PARSE_PROMPT + text + '\n"""' }], ADDR, TIMEOUT_MS.parse);
   } else if (b.task === 'bulk') {
     const text = String(b.text || '').slice(0, 40000);
     if (!text.trim()) return fail(400, 'No text');
-    out = await gemini(env, [{ text: BULK_PROMPT + rulesOnly() + '\n\nChat:\n"""\n' + text + '\n"""' }], { type: 'ARRAY', items: ADDR_RAW });
+    out = await gemini(env, [{ text: BULK_PROMPT + rulesOnly() + '\n\nChat:\n"""\n' + text + '\n"""' }], { type: 'ARRAY', items: ADDR_RAW }, TIMEOUT_MS.bulk);
   } else if (b.task === 'image') {
     const img = dataUrlPart(b.image);
     if (!img) return fail(400, 'No image');
-    out = await gemini(env, [{ text: IMAGE_PROMPT + rulesOnly() }, img], { type: 'ARRAY', items: ADDR });
+    out = await gemini(env, [{ text: IMAGE_PROMPT + rulesOnly() }, img], { type: 'ARRAY', items: ADDR }, TIMEOUT_MS.image);
   } else if (b.task === 'name') {
     const imgs = Array.isArray(b.images) ? b.images.slice(0, 24) : [];
     if (!imgs.length) return fail(400, 'No images');
     const parts = [{ text: NAME_PROMPT }];
     for (const it of imgs) { const p = dataUrlPart(it.image); if (p) parts.push({ text: 'id: ' + String(it.id).slice(0, 40) }, p); }
-    out = await gemini(env, parts, { type: 'ARRAY', items: { type: 'OBJECT', properties: { id: { type: 'STRING' }, name: { type: 'STRING' } }, required: ['id', 'name'] } });
+    out = await gemini(env, parts, { type: 'ARRAY', items: { type: 'OBJECT', properties: { id: { type: 'STRING' }, name: { type: 'STRING' } }, required: ['id', 'name'] } }, TIMEOUT_MS.name);
   } else return fail(400, 'Unknown task');
   if (out.error) return fail(out.status || 502, out.error, out.detail ? { detail: out.detail } : {});
   return json({ result: out.data, model: out.model });
