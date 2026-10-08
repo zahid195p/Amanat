@@ -71,7 +71,14 @@ jobs:
           echo "DNS now for $WANT: $(dig +short $WANT | tr '\n' ' ')"
           echo "CNAME at Namecheap: $(dig +short CNAME $WANT @dns1.registrar-servers.com | tr '\n' ' ')"
           echo "All records at Namecheap for $WANT: $(dig +short ANY $WANT @dns1.registrar-servers.com | tr '\n' ' ')"
-          echo "http: $(curl -s -o /dev/null -w '%{http_code}' -m 10 http://$WANT/) https: $(curl -s -o /dev/null -w '%{http_code}' -m 10 https://$WANT/)"
+          # Ask Cloudflare to re-check the domain until it is active (certificate issued), up to ~8 minutes.
+          for i in $(seq 1 16); do
+            st=$(curl -s -H "$H" "$API/$WANT" | jq -r '.result.status')
+            echo "try $i: status $st, https $(curl -s -o /dev/null -w '%{http_code}' -m 10 https://$WANT/)"
+            [ "$st" = "active" ] && break
+            curl -s -X PATCH -H "$H" "$API/$WANT" >/dev/null
+            sleep 30
+          done
       - name: Smoke test live site
         if: steps.tok.outputs.skip != '1'
         run: |
@@ -81,4 +88,3 @@ jobs:
           echo "home: $(curl -s -o /dev/null -w '%{http_code}' $SITE/)"
           echo "sw: $(curl -s -o /dev/null -w '%{http_code}' $SITE/sw.js)"
           echo "setup: $(curl -s $SITE/api/setup)"
-          echo "login bad: $(curl -s -X POST -H 'content-type: application/json' $SITE/api/login -d '{"profileId":"nobody","code":"1234"}')"
