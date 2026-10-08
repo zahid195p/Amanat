@@ -3,7 +3,7 @@
 Offline-first web app for flight items, parcel groups and courier sending.
 Installs to the Home Screen on iPhone and Android, and runs in any laptop browser.
 
-- **Live:** https://amanat.fazool.skin (and the Cloudflare address `https://amanat.pages.dev`)
+- **Live:** https://amanat.fazol.skin (and the Cloudflare address https://amanat-2oq.pages.dev)
 - **Stack:** Vite + vanilla JS PWA · Firebase Firestore (free Spark plan) with offline cache · Cloudflare Pages + Functions · Google Gemini (free tier)
 
 ## How it is deployed
@@ -12,7 +12,7 @@ Every push to `main` or `claude/vibrant-lamport-73cbm9` runs `.github/workflows/
 1. builds the app,
 2. creates the Cloudflare Pages project `amanat` and the KV namespace `amanat` if missing,
 3. copies the GitHub secrets `FIREBASE_SERVICE_ACCOUNT` and `GEMINI_API_KEY` into Cloudflare's encrypted secrets,
-4. deploys, and attaches the custom domain `amanat.fazool.skin`.
+4. deploys, and attaches the custom domain `amanat.fazol.skin`.
 
 ## Where each secret lives
 
@@ -28,8 +28,8 @@ The Firebase web config in `src/firebase-config.js` is public by design; `firest
 
 ## Domain (Namecheap)
 
-`fazool.skin` DNS is at Namecheap. In Namecheap: **Domain List → fazool.skin → Manage → Advanced DNS → Add New Record**:
-`CNAME Record` · Host `amanat` · Value `amanat.pages.dev` · TTL Automatic. Do not change the other records.
+`fazol.skin` DNS is at Namecheap. In Namecheap: **Domain List → fazol.skin → Manage → Advanced DNS → Add New Record**:
+`CNAME Record` · Host `amanat` · Value `amanat-2oq.pages.dev` · TTL Automatic. Do not change the other records.
 
 ## Profiles and codes
 
