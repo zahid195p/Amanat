@@ -58,6 +58,8 @@ await a.click('#gs-read');
 ok(await until(a, () => document.querySelector('#gs-phone')?.value === '03161749964' && document.querySelector('#gs-city')?.value === 'Mandi Bahauddin', null, 1500), 'basic reader fills the fields instantly');
 await a.click('#gs-save');
 ok(await until(a, () => /Qasim Imtiaz/.test(document.querySelector('.gpanel')?.innerText || '')), 'group made with 2 items');
+ok(await until(a, () => document.querySelector('.gpanel .pno')?.textContent === 'P1'), 'first parcel gets number P1');
+ok(await until(a, () => [...document.querySelectorAll('.card .gtag')].some((x) => x.textContent.startsWith('P1 '))), 'photo cards show the parcel number');
 await a.click('[data-act=tab][data-v=service]');
 ok(await until(a, () => { const s = document.querySelector('[data-key="sec-TCS"]'); return s && /Qasim/.test(s.innerText) && /or Leopards/.test(s.innerText); }), 'combined service listed under TCS with tag (B5)');
 ok(await a.evaluate(() => !!document.querySelector('a[href^="https://wa.me/923161749964"]') && !!document.querySelector('a[href^="tel:03161749964"]')), 'tel and WhatsApp links');
@@ -134,11 +136,13 @@ ok(await until(a, () => ![...document.querySelectorAll('.card .num')].some((x) =
 ok(await until(b, () => /Ali Khan/.test(document.body.innerText) || (document.querySelector('[data-act=tab][data-v=groups]')?.click(), false), null, 20000), 'offline work reaches the other device');
 const nums = await a.evaluate(() => [...document.querySelectorAll('.card .num')].map((x) => x.textContent));
 ok(new Set(nums).size === nums.length, 'no duplicate item numbers: ' + nums.join(' '));
+await a.click('[data-act=tab][data-v=groups]');
+ok(await until(a, () => { const p = [...document.querySelectorAll('.gcard .pno')].map((x) => x.textContent); return p.length >= 2 && !p.some((x) => x.includes('~')) && new Set(p).size === p.length; }, null, 20000), 'offline parcel got a real, unique number');
 
 // 11. Counter + back gesture
 await b.click('[data-act=tab][data-v=service]');
 await b.click('[data-act=counter]');
-ok(await until(b, () => !!document.querySelector('.counter')), 'counter opens');
+ok(await until(b, () => /^P\d+$/.test(document.querySelector('.counter .c-pno')?.textContent || '')), 'counter opens with big parcel number');
 await b.goBack();
 ok(await until(b, () => !document.querySelector('.counter')), 'back closes the counter (B11)');
 ok(await b.evaluate(() => location.href.startsWith('http://localhost:8788')), 'still in the app after back');

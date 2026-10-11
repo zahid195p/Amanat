@@ -1,7 +1,7 @@
 // Rendering of the main screens. Everything is re-rendered from state (snapshots) via morphdom.
 import morphdom from 'morphdom';
 import {
-  S, $, esc, plural, fmtDate, fmtPhone, fmtBytes, isAdmin, can, curFlight, groupById, gColor, gTitle, visItems, itemsIn,
+  S, $, esc, plural, fmtDate, fmtPhone, fmtBytes, isAdmin, can, curFlight, groupById, gColor, gTitle, visItems, itemsIn, gLabel, pLabel,
   ungrouped, active, sentGroups, toSend, qtyOf, piecesIn, numLabel, itemLabel, svcKey, svcSort, mainSvc, missing,
   trackUrl, STEPS, FREE_BYTES, layerCount,
 } from './core.js';
@@ -97,7 +97,7 @@ function vSetup() {
 /* ---------- search ---------- */
 const lc = (s) => String(s || '').toLowerCase();
 function groupText(g) { return lc([g.name, g.phone, g.phone2, g.city, g.address, g.tracking, g.service, g.note, ...itemsIn(g.id).map((i) => i.name)].join(' ')); }
-export function matchGroup(g) { const q = lc(S.q).trim(); if (!q) return true; const d = q.replace(/\D/g, ''); return groupText(g).includes(q) || (d.length >= 4 && (String(g.phone) + String(g.phone2)).replace(/\D/g, '').includes(d)); }
+export function matchGroup(g) { const q = lc(S.q).trim(); if (!q) return true; if (/^p~?\d+$/.test(q)) return lc(pLabel(g)) === q; const d = q.replace(/\D/g, ''); return groupText(g).includes(q) || (d.length >= 4 && (String(g.phone) + String(g.phone2)).replace(/\D/g, '').includes(d)); }
 function matchItem(i) {
   const q = lc(S.q).trim(); if (!q) return true;
   const g = groupById(i.groupId);
@@ -110,7 +110,7 @@ function card(i) {
   const g = groupById(i.groupId); const sel = S.sel.has(i.id); const ph = i.photos || [];
   const edit = can('name');
   return `<div class="card ${sel ? 'sel' : ''}" data-key="it-${i.id}" data-iid="${i.id}">
- <div class="ph" data-tsel="${i.id}" role="button" tabindex="0" aria-pressed="${sel}" aria-label="Select item ${numLabel(i)}">${ph[0] ? `<img src="${ph[0].t}" alt="" draggable="false" loading="lazy" decoding="async">` : ''}<span class="num">${numLabel(i)}</span>${ph.length > 1 ? `<span class="stack">${ph.length} photos</span>` : ''}${g ? `<span class="gtag" style="--g:${gColor(g)}">${esc(gTitle(g))}</span>` : ''}<span class="ck">${sel ? '✓' : ''}</span>${i._pending ? `<span class="pend on-ph">${ICON.cloud}</span>` : ''}</div>
+ <div class="ph" data-tsel="${i.id}" role="button" tabindex="0" aria-pressed="${sel}" aria-label="Select item ${numLabel(i)}">${ph[0] ? `<img src="${ph[0].t}" alt="" draggable="false" loading="lazy" decoding="async">` : ''}<span class="num">${numLabel(i)}</span>${ph.length > 1 ? `<span class="stack">${ph.length} photos</span>` : ''}${g ? `<span class="gtag" style="--g:${gColor(g)}">${esc(gLabel(g))}</span>` : ''}<span class="ck">${sel ? '✓' : ''}</span>${i._pending ? `<span class="pend on-ph">${ICON.cloud}</span>` : ''}</div>
  <button class="zoom" data-act="view" data-id="${i.id}" aria-label="Open large">⤢</button>
  <div class="meta">${edit ? `<input class="nm" id="nm-${i.id}" data-name="${i.id}" value="${esc(i.name || '')}" placeholder="Name it, e.g. brown shoes" aria-label="Name"><input class="qt" id="qt-${i.id}" data-qty="${i.id}" inputmode="numeric" value="${esc(i.qty ?? '')}" placeholder="Qty" aria-label="Quantity">` : `<div class="nmt ${i.name ? '' : 'none'}">${esc(i.name || 'No name')}${Number(i.qty) > 1 ? ` ×${esc(i.qty)}` : ''}</div>`}${isAdmin() ? `<button class="del" data-act="delItem" data-id="${i.id}" aria-label="Delete item ${numLabel(i)}" title="Delete">${ICON.trash}</button>` : ''}</div></div>`;
 }
@@ -125,7 +125,7 @@ export function groupCard(g, compact) {
   const its = itemsIn(g.id); const m = missing(g); const n = compact ? 8 : 16;
   const svcs = String(g.service || '').split('/').map((s) => s.trim()).filter(Boolean);
   return `<div class="gcard ${g.done ? 'sent' : ''}" data-key="g-${g.id}" data-big="${g.id}" ${g.done ? '' : `data-drop="${g.id}"`} style="--g:${gColor(g)}">
- <div class="gc-top"><span class="gc-name">${g.done ? '✓ ' : ''}${esc(gTitle(g))}</span>${pendingBadge(g._pending)}<span class="svc ${g.service ? '' : 'none'}">${esc(svcs[0] || 'No service')}</span>${svcs.length > 1 ? `<span class="svc alt">or ${esc(svcs.slice(1).join(' / '))}</span>` : ''}</div>
+ <div class="gc-top"><span class="pno" title="Parcel number: write it on the box">${esc(pLabel(g))}</span><span class="gc-name">${g.done ? '✓ ' : ''}${esc(gTitle(g))}</span>${pendingBadge(g._pending)}<span class="svc ${g.service ? '' : 'none'}">${esc(svcs[0] || 'No service')}</span>${svcs.length > 1 ? `<span class="svc alt">or ${esc(svcs.slice(1).join(' / '))}</span>` : ''}</div>
  <div class="gc-sub">${esc([g.city, fmtPhone(g.phone)].filter(Boolean).join(', ') || 'No phone or city')}</div>
  ${!compact && g.address ? `<div style="font-size:15px">${esc(g.address)}</div>` : ''}
  ${m.length ? `<div class="warn">Missing: ${m.join(', ')}</div>` : ''}
@@ -157,7 +157,7 @@ function vPhotos() {
   const all = visItems();
   if (all.length && un.length) h += `<div class="note bad"><span>${plural(un.length, 'item')} not in any group yet</span>${S.show !== 'un' ? '<button class="btn sm" data-act="show" data-v="un">Show them</button>' : ''}</div>`;
   if (all.length && !un.length) h += `<div class="note"><span>Every item is in a group.</span><button class="btn sm" data-act="tab" data-v="service">See by service</button></div>`;
-  h += `<div class="tray" aria-label="Groups"><button class="gchip" data-drop="" data-act="noop"><span>Not in a group</span><b>${un.length}</b></button>${active().map((g) => `<button class="gchip" data-key="tray-${g.id}" data-drop="${g.id}" data-act="editGroup" data-id="${g.id}" style="--g:${gColor(g)}"><i></i><span>${esc(gTitle(g))}</span><b>${itemsIn(g.id).length}</b></button>`).join('')}${can('group') ? '<button class="gchip add" data-act="newGroupSel">+ New group</button>' : ''}</div>`;
+  h += `<div class="tray" aria-label="Groups"><button class="gchip" data-drop="" data-act="noop"><span>Not in a group</span><b>${un.length}</b></button>${active().map((g) => `<button class="gchip" data-key="tray-${g.id}" data-drop="${g.id}" data-act="editGroup" data-id="${g.id}" style="--g:${gColor(g)}"><i></i><span><b class="pn">${esc(pLabel(g))}</b> ${esc(gTitle(g))}</span><b>${itemsIn(g.id).length}</b></button>`).join('')}${can('group') ? '<button class="gchip add" data-act="newGroupSel">+ New group</button>' : ''}</div>`;
   h += `<div class="board"><div><div class="toolbar"><div class="seg"><button class="${S.show === 'un' ? 'on' : ''}" data-act="show" data-v="un">Not grouped ${un.length}</button><button class="${S.show === 'todo' ? 'on' : ''}" data-act="show" data-v="todo">Still to send ${ts.length}</button><button class="${S.show === 'all' ? 'on' : ''}" data-act="show" data-v="all">All ${all.length}</button></div>${shown.length ? '<button class="btn sm" data-act="selAll">Select all shown</button>' : ''}${aiAllowed() && can('name') && all.some((i) => !i.name) ? '<button class="btn sm" data-act="aiNameAll" title="Send thumbnails to AI to suggest names">Name with AI</button>' : ''}</div>
  ${all.length > 12 ? searchBox('Search items, #number or group') : ''}
  <p class="dim hint">${matchMedia('(pointer:fine)').matches ? 'Click photos to select (Shift-click for a range, or drag a box). Drag them onto a group on the right.' : 'Tap photos to select, then Add to group. Or hold a photo and drag it onto a group above.'}</p>`;
@@ -192,8 +192,8 @@ function filteredGroups() {
   if (f.status === 'open') gs = gs.filter((g) => !g.done);
   if (f.status === 'sent') gs = gs.filter((g) => g.done);
   if (f.status === 'missing') gs = gs.filter((g) => !g.done && missing(g).length);
-  const by = { newest: (a, b) => (b.at || 0) - (a.at || 0), oldest: (a, b) => (a.at || 0) - (b.at || 0), name: (a, b) => lc(a.name).localeCompare(lc(b.name)), city: (a, b) => lc(a.city).localeCompare(lc(b.city)) || lc(a.name).localeCompare(lc(b.name)) };
-  return gs.sort(by[f.sort] || by.oldest);
+  const by = { parcel: (a, b) => (a.pn || 1e9) - (b.pn || 1e9) || (a.at || 0) - (b.at || 0), newest: (a, b) => (b.at || 0) - (a.at || 0), oldest: (a, b) => (a.at || 0) - (b.at || 0), name: (a, b) => lc(a.name).localeCompare(lc(b.name)), city: (a, b) => lc(a.city).localeCompare(lc(b.city)) || lc(a.name).localeCompare(lc(b.name)) };
+  return gs.sort(by[f.sort] || by.parcel);
 }
 function vGroups() {
   let h = `<div class="row" style="margin-bottom:12px">${can('group') ? `<button class="btn primary" data-act="newGroupSel">+ New group (paste address)</button><button class="btn" data-act="bulk">Paste many addresses</button>${aiAllowed() ? '<button class="btn" data-act="shot">Read a screenshot</button>' : ''}` : ''}</div>`;
@@ -201,11 +201,11 @@ function vGroups() {
   const cities = [...new Set(S.groups.map((g) => g.city).filter(Boolean))].sort();
   const svcs = [...new Set(S.groups.map((g) => svcKey(g.service)))].sort(svcSort);
   const f = S.gf;
-  h += searchBox('Search name, phone, city, tracking, item');
+  h += searchBox('Search P3, name, phone, city, tracking, item');
   h += `<div class="filters"><div class="seg">${[['open', 'To send'], ['missing', 'Missing details'], ['sent', 'Sent'], ['all', 'All']].map(([k, l]) => `<button class="${f.status === k ? 'on' : ''}" data-act="gf" data-k="status" data-v="${k}">${l}</button>`).join('')}</div>
   <select data-gf="city" aria-label="City"><option value="">All cities</option>${cities.map((c) => `<option ${f.city === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
   <select data-gf="service" aria-label="Service"><option value="">All services</option>${svcs.map((c) => `<option ${f.service === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
-  <select data-gf="sort" aria-label="Sort">${[['oldest', 'Oldest first'], ['newest', 'Newest first'], ['name', 'Name A–Z'], ['city', 'City']].map(([k, l]) => `<option value="${k}" ${f.sort === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`;
+  <select data-gf="sort" aria-label="Sort">${[['parcel', 'Parcel number'], ['oldest', 'Oldest first'], ['newest', 'Newest first'], ['name', 'Name A–Z'], ['city', 'City']].map(([k, l]) => `<option value="${k}" ${f.sort === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`;
   const gs = filteredGroups();
   return h + (gs.length ? `<div class="glist">${gs.map((g) => groupCard(g, false)).join('')}</div>` : '<div class="empty"><h2>Nothing here</h2><p>No group matches these filters.</p></div>');
 }
@@ -228,7 +228,7 @@ function parcel(g, k) {
   const tu = trackUrl(g);
   const step = [...STEPS].reverse().find(([s]) => g.steps?.[s]);
   return `<div class="parcel ${g.done ? 'done' : ''}" data-key="p-${g.id}" data-big="${g.id}" style="--g:${gColor(g)}">${can('send') ? `<button class="pk" data-act="toggleDone" data-id="${g.id}" aria-label="${g.done ? 'Mark not sent' : 'Mark sent'}">${g.done ? '✓' : ''}</button>` : `<span class="pk">${g.done ? '✓' : ''}</span>`}
-   <span class="p-name">${esc(gTitle(g))}${g.phone ? ` <span style="font-weight:600">${esc(fmtPhone(g.phone))}</span>` : ''}${g.phone2 ? `<span class="dim" style="font-weight:500">, ${esc(fmtPhone(g.phone2))}</span>` : ''}${pendingBadge(g._pending)}${svcs.length > 1 && svcs[0] === k ? ` <span class="svc alt">or ${esc(svcs.slice(1).join(' / '))}</span>` : ''}</span>
+   <span class="p-name"><span class="pno">${esc(pLabel(g))}</span> ${esc(gTitle(g))}${g.phone ? ` <span style="font-weight:600">${esc(fmtPhone(g.phone))}</span>` : ''}${g.phone2 ? `<span class="dim" style="font-weight:500">, ${esc(fmtPhone(g.phone2))}</span>` : ''}${pendingBadge(g._pending)}${svcs.length > 1 && svcs[0] === k ? ` <span class="svc alt">or ${esc(svcs.slice(1).join(' / '))}</span>` : ''}</span>
    <div class="p-addr">${esc(g.address || '')}${g.city ? `, <b>${esc(g.city)}</b>` : ''}${g.note ? `<div class="dim">${esc(g.note)}</div>` : ''}${m.length ? `<div class="warn">Missing: ${m.join(', ')}</div>` : ''}
    ${g.tracking || g.weight || g.charges || step ? `<div class="p-meta">${step ? `<span class="stp">${esc(step[1])}</span>` : ''}${g.tracking ? `<span>Tracking <b>${esc(g.tracking)}</b> <button class="ib" data-act="copy" data-v="${esc(g.tracking)}" aria-label="Copy tracking number">${ICON.copy}</button>${tu ? ` <a href="${esc(tu)}" target="_blank" rel="noopener">Track</a>` : ''}</span>` : ''}${g.weight ? `<span>${esc(g.weight)} kg</span>` : ''}${g.charges ? `<span>Rs ${Number(g.charges).toLocaleString('en-PK')}</span>` : ''}</div>` : ''}</div>
    <div class="p-items">${its.length ? its.map((i) => `<span><img src="${i.photos?.[0]?.t || ''}" alt="" loading="lazy">${esc(itemLabel(i))}</span>`).join('') : '<span class="warn" style="background:none">No items in this group</span>'}</div><div class="row" style="grid-column:2;margin-top:4px"><button class="btn sm" data-act="counter" data-id="${g.id}">Show big</button>${telLinks(g)}${g.done && isMobile(g.phone) ? `<button class="btn sm" data-act="msgReceiver" data-id="${g.id}">Message receiver</button>` : ''}${can('group') || can('send') ? `<button class="btn sm" data-act="editGroup" data-id="${g.id}">Edit</button>` : ''}</div></div>`;

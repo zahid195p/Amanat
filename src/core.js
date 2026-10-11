@@ -39,7 +39,7 @@ export const S = {
   cfg: {}, flights: [], flightsLoaded: false, flightsFromCache: true,
   fid: null, items: [], groups: [], itemsLoaded: false,
   tab: 'photos', show: null, sel: new Set(), lastSel: null, q: '',
-  gf: { city: '', service: '', status: 'open', sort: 'oldest' },
+  gf: { city: '', service: '', status: 'open', sort: 'parcel' },
   uq: [], gridLimit: 120, hidden: new Set(), inflight: 0, pendingDocs: 0, online: navigator.onLine,
   showSent: false, openSent: null, loginPick: null, dash: false,
 };
@@ -67,6 +67,9 @@ export const curFlight = () => S.flights.find((f) => f.id === S.fid) || null;
 export const groupById = (id) => (id ? S.groups.find((g) => g.id === id) : null);
 export const gColor = (g) => GC[(g?.ci || 0) % GC.length];
 export const gTitle = (g) => (g ? g.name || 'No name yet' : '');
+// Parcel number, written on the box while packing: P1, P2… per flight ("P~3" until it syncs).
+export const pLabel = (g) => (!g ? '' : g.pn ? 'P' + g.pn : 'P~' + (g.ptmp || '?'));
+export const gLabel = (g) => (g ? `${pLabel(g)} ${gTitle(g)}` : '');
 export const visItems = () => S.items.filter((i) => !S.hidden.has(i.id));
 export const itemsIn = (gid) => visItems().filter((i) => i.groupId === gid);
 export const ungrouped = () => visItems().filter((i) => !groupById(i.groupId));
@@ -281,8 +284,8 @@ export function setFlight(fid) {
       countPending(); schedule(); numberItems();
     }, dbErr));
     unsubF.push(onSnapshot(query(collection(db, 'groups'), where('fid', '==', fid)), { includeMetadataChanges: true }, (q) => {
-      S.groups = docsOf(q).sort((a, b) => (a.at || 0) - (b.at || 0));
-      countPending(); schedule();
+      S.groups = docsOf(q).sort((a, b) => (a.pn || 1e9) - (b.pn || 1e9) || (a.at || 0) - (b.at || 0));
+      countPending(); schedule(); numberDocs('groups');
     }, dbErr));
   }
   schedule();
@@ -293,31 +296,39 @@ function countPending() { S.pendingDocs = S.items.filter((i) => i._pending).leng
 addEventListener('online', () => { S.online = true; schedule(); numberItems(); });
 addEventListener('offline', () => { S.online = false; schedule(); });
 
-/* ---------- item numbers — B7 ----------
-   New items are written with n:null and a local temporary number (shown "#~3").
-   Once an item has reached the server, a transaction on the flight's counter
-   (flights/{fid}.nextN) gives it the next real number. Two devices can run this
-   at the same time: the transaction re-reads each item and skips numbered ones. */
-let numbering = false;
-export async function numberItems() {
-  if (numbering || !S.fid || !navigator.onLine || !S.me) return;
-  const todo = S.items.filter((i) => !i.n && !i._pending).sort((a, b) => (a.at || 0) - (b.at || 0) || a.id.localeCompare(b.id)).slice(0, 40);
+/* ---------- item and parcel numbers — B7 ----------
+   New items (and groups) are written with no number and a local temporary one
+   (shown "#~3" / "P~3"). Once a doc has reached the server, a transaction on the
+   flight's counter (flights/{fid}.nextN for items, .nextP for parcels) gives it the
+   next real number. Two devices can run this at the same time: the transaction
+   re-reads each doc and skips ones already numbered, so numbers never repeat. */
+const NUMBERING = {
+  items: { list: () => S.items, field: 'n', counter: 'nextN', allowed: () => true },
+  groups: { list: () => S.groups, field: 'pn', counter: 'nextP', allowed: () => can('group') },
+};
+const numbering = {};
+async function numberDocs(col) {
+  const c = NUMBERING[col];
+  if (numbering[col] || !S.fid || !navigator.onLine || !S.me || !c.allowed()) return;
+  const all = c.list();
+  const todo = all.filter((d) => !d[c.field] && !d._pending).sort((a, b) => (a.at || 0) - (b.at || 0) || a.id.localeCompare(b.id)).slice(0, 40);
   if (!todo.length) return;
-  numbering = true;
-  const fid = S.fid, fallback = S.items.reduce((m, i) => Math.max(m, i.n || 0), 0) + 1;
+  numbering[col] = true;
+  const fid = S.fid, fallback = all.reduce((m, d) => Math.max(m, d[c.field] || 0), 0) + 1;
   try {
     await runTransaction(db, async (tx) => {
       const fref = D('flights/' + fid);
       const fs = await tx.get(fref);
-      let next = Math.max(fs.data()?.nextN || 1, fallback);
-      const snaps = await Promise.all(todo.map((i) => tx.get(D('items/' + i.id))));
-      snaps.forEach((s, k) => { if (s.exists() && !s.data().n) tx.update(D('items/' + todo[k].id), { n: next++ }); });
-      tx.update(fref, { nextN: next });
+      let next = Math.max(fs.data()?.[c.counter] || 1, fallback);
+      const snaps = await Promise.all(todo.map((d) => tx.get(D(col + '/' + d.id))));
+      snaps.forEach((sn, k) => { if (sn.exists() && !sn.data()[c.field]) tx.update(D(col + '/' + todo[k].id), { [c.field]: next++ }); });
+      tx.update(fref, { [c.counter]: next });
     });
-  } catch (e) { console.warn('numbering', e); }
-  numbering = false;
-  if (S.items.some((i) => !i.n && !i._pending)) setTimeout(numberItems, 1500);
+  } catch (e) { console.warn('numbering ' + col, e); }
+  numbering[col] = false;
+  if (c.list().some((d) => !d[c.field] && !d._pending)) setTimeout(() => numberDocs(col), 1500);
 }
+export function numberItems() { numberDocs('items'); numberDocs('groups'); }
 export function nextTmp() {
   return S.items.reduce((m, i) => Math.max(m, i.n || 0, i.tmp || 0), 0) + 1;
 }
@@ -329,8 +340,9 @@ export function newGroup(data, assignIds = []) {
   const ci = S.groups.reduce((m, g) => Math.max(m, (g.ci ?? -1) + 1), 0) + (S.gBump || 0);
   S.gBump = (S.gBump || 0) + 1; setTimeout(() => (S.gBump = 0), 3000);
   const id = rid();
+  const ptmp = S.groups.reduce((m, g) => Math.max(m, g.pn || 0, g.ptmp || 0), 0) + 1 + (S.gBump - 1);
   put('groups/' + id, {
-    fid: S.fid, ci, ...clean, raw: data.raw || '', done: false, at: now(), by: S.me.uid,
+    fid: S.fid, ci, pn: null, ptmp, ...clean, raw: data.raw || '', done: false, at: now(), by: S.me.uid,
     aiPending: !!data.aiPending, tracking: '', weight: null, charges: null,
     steps: { arrived: { at: now(), by: S.me.uid } }, packed: {},
   });
@@ -354,8 +366,8 @@ export function moveItems(ids, gid, quiet) {
   S.sel.clear(); schedule();
   const g = groupById(gid);
   const nums = ids.map((id) => S.items.find((i) => i.id === id)).filter(Boolean).map(numLabel).join(', ');
-  logEv(gid ? `moved ${nums} to ${gTitle(g)}` : `took ${nums} out of its group`);
-  if (!quiet) toast(`${plural(ids.length, 'item')} ${gid ? 'added to ' + gTitle(g) : 'taken out of its group'}`, {
+  logEv(gid ? `moved ${nums} to ${gLabel(g)}` : `took ${nums} out of its group`);
+  if (!quiet) toast(`${plural(ids.length, 'item')} ${gid ? 'added to ' + gLabel(g) : 'taken out of its group'}`, {
     undo: () => { before.forEach(([id, old]) => upd('items/' + id, { groupId: old })); logEv(`undid moving ${nums}`); },
   });
 }
@@ -369,7 +381,7 @@ export async function combine(ids, targetGroup) {
   let gid = gids[0] || '';
   if (targetGroup === undefined && gids.length > 1) {
     gid = await choose('Which group?', 'These items are in different groups. Which group should the combined item go to?', [
-      ...gids.map((g) => ({ label: gTitle(groupById(g)), v: g })), { label: 'No group', v: '__none' }]);
+      ...gids.map((g) => ({ label: gLabel(groupById(g)), v: g })), { label: 'No group', v: '__none' }]);
     if (!gid) return; if (gid === '__none') gid = '';
   }
   const first = its[0]; const rest = its.slice(1);
@@ -407,7 +419,7 @@ export function setDone(gids, done) {
   const prev = gs.map((g) => [g.id, !!g.done, g.steps?.sent || null]);
   for (const g of gs) upd('groups/' + g.id, { done, 'steps.sent': done ? { at: now(), by: S.me.uid } : deleteField() });
   logEv(`${done ? 'marked sent' : 'marked not sent'}: ${gs.map(gTitle).join(', ')}`);
-  toast(gs.length === 1 ? `${gTitle(gs[0])} ${done ? 'marked sent' : 'back to not sent'}` : `${plural(gs.length, 'parcel')} marked ${done ? 'sent' : 'not sent'}`, {
+  toast(gs.length === 1 ? `${gLabel(gs[0])} ${done ? 'marked sent' : 'back to not sent'}` : `${plural(gs.length, 'parcel')} marked ${done ? 'sent' : 'not sent'}`, {
     undo: () => { prev.forEach(([id, d, st]) => upd('groups/' + id, { done: d, 'steps.sent': st || deleteField() })); logEv('undid mark sent'); },
   });
 }
@@ -415,5 +427,5 @@ export function setStep(g, key, on) {
   const patch = { ['steps.' + key]: on ? { at: now(), by: S.me.uid } : deleteField() };
   if (key === 'sent') patch.done = on;
   upd('groups/' + g.id, patch);
-  logEv(`${on ? 'set' : 'cleared'} "${key}" for ${gTitle(g)}`);
+  logEv(`${on ? 'set' : 'cleared'} "${key}" for ${gLabel(g)}`);
 }

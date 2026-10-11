@@ -308,3 +308,11 @@ a.btn{text-decoration:none}
 .c-it .pack{display:block;width:100%;border:0;border-top:2px solid #D5DAE0;background:#fff;color:#0B1118;font-weight:700;font-size:18px;min-height:52px}
 .c-it.packed{border-color:#1E8757}
 .c-it.packed .pack{background:#1E8757;color:#fff}
+
+/* parcel numbers (write on the box) */
+.pno{flex:none;display:inline-block;background:var(--sign);color:var(--sign-ink);font-family:var(--f-cond);font-weight:700;font-size:20px;line-height:1;padding:4px 8px;border-radius:6px;border:2px solid var(--sign-ink);margin-right:2px;vertical-align:middle}
+.p-name .pno{font-size:18px;padding:2px 7px}
+.gchip .pn{color:var(--ink);font-size:15px}
+.counter .c-pno{background:#0B1118;color:#FFC21A;font-family:var(--f-cond);font-weight:700;font-size:clamp(56px,16vw,110px);line-height:1;padding:4px 18px;border-radius:10px}
+.counter .c-top{justify-content:flex-start}
+.counter .c-top .c-x{margin-left:auto}

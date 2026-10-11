@@ -2,7 +2,7 @@
 import morphdom from 'morphdom';
 import {
   S, $, $$, esc, rid, now, plural, todayISO, fmtDate, fmtTime, fmtBytes, fmtPhone, isAdmin, can, curFlight, groupById, gColor, gTitle,
-  itemsIn, active, qtyOf, piecesIn, numLabel, itemLabel, svcKey, svcSort, mainSvc, missing, trackUrl, waMessage, toast, sheet, closeSheet,
+  itemsIn, active, qtyOf, gLabel, pLabel, piecesIn, numLabel, itemLabel, svcKey, svcSort, mainSvc, missing, trackUrl, waMessage, toast, sheet, closeSheet,
   closeAll, choose, ask, pushLayer, closeTop, schedule, upd, put, del, w, D, saveLater, flushAll, logEv, newGroup, saveBook, lookupBook,
   moveItems, combine, deleteItems, setDone, setStep, setFlight, nextTmp, getDoc, getDocs, collection, query, where, writeBatch,
   increment, deleteField, db, STEPS, PERM_LABELS, DEFAULT_PERMS, PROFILE_COLORS, DEFAULT_WA, DEFAULT_TRACK, FREE_BYTES, setDoc,
@@ -40,7 +40,7 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
   const d = g || { name: '', phone: '', phone2: '', address: '', city: '', service: '', note: '', raw: '' };
   const eg = can('group'), es = can('send');
   const ro = eg ? '' : 'readonly';
-  const sh = sheet(g ? 'Edit group' : 'New group', `
+  const sh = sheet(g ? 'Edit group ' + pLabel(g) : 'New group', `
  ${eg ? `<label class="fld"><span>Paste one person's message as it is (one parcel)</span><textarea id="gs-raw" style="min-height:110px" placeholder="Ali Khan&#10;0300 1234567&#10;House 12, Street 4, Ali Town, Lahore&#10;TCS">${esc(d.raw || '')}</textarea></label>
  <div class="row" style="margin-bottom:8px"><button class="btn dark" id="gs-read">Fill in from the message</button>${aiAllowed() ? '<button class="btn" id="gs-shot">Read a screenshot</button>' : ''}<span class="status" id="gs-st"></span></div>
  <div id="gs-diff"></div>` : ''}
@@ -88,7 +88,7 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
         const cur = groupById(g.id);
         put('receipts/' + pid, { fid: S.fid, gid: g.id, d: full, at: now() }); cachePhoto(pid, full);
         if (cur.receipt) del('receipts/' + cur.receipt.p);
-        upd('groups/' + g.id, { receipt: { p: pid, t: thumb } }); logEv(`added booking slip for ${gTitle(cur)}`);
+        upd('groups/' + g.id, { receipt: { p: pid, t: thumb } }); logEv(`added booking slip for ${gLabel(cur)}`);
       } catch (e) { toast(e.message); }
     }
   });
@@ -173,7 +173,7 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
   }
   // Duplicate phone warning (feature 18).
   const dupOf = () => { const k = phoneKey(F('phone').value); if (!k) return null; return S.groups.find((x) => x.id !== g?.id && !x.done && [x.phone, ...String(x.phone2 || '').split(',')].some((p) => phoneKey(p) === k)); };
-  const checkDup = () => { const box = F('dup'); if (!box) return; const x = dupOf(); box.innerHTML = x ? `<div class="note bad"><span>${esc(gTitle(x))} already has a group with this phone on this flight.</span></div>` : ''; };
+  const checkDup = () => { const box = F('dup'); if (!box) return; const x = dupOf(); box.innerHTML = x ? `<div class="note bad"><span>${esc(gLabel(x))} already has a group with this phone on this flight.</span></div>` : ''; };
   checkDup();
   if (prefill) fill(prefill);
 
@@ -190,13 +190,13 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
     if (!g) {
       const x = dupOf();
       if (x) {
-        const c = await choose('Same phone number', `${gTitle(x)} already has a group with this phone. Put these items in that group instead?`, [{ label: 'Cancel', v: null }, { label: 'Make a new group', v: 'new' }, { label: 'Merge into ' + gTitle(x), v: 'merge', cls: 'primary' }]);
+        const c = await choose('Same phone number', `${gLabel(x)} already has a group with this phone. Put these items in that group instead?`, [{ label: 'Cancel', v: null }, { label: 'Make a new group', v: 'new' }, { label: 'Merge into ' + gLabel(x), v: 'merge', cls: 'primary' }]);
         if (!c) return;
         if (c === 'merge') {
           const patch = {}; for (const k of FIELDS) if (data[k] && !x[k]) patch[k] = data[k];
           if (Object.keys(patch).length) upd('groups/' + x.id, patch);
           if (assignIds.length) moveItems(assignIds, x.id, true);
-          closeSheet(); toast('Merged into ' + gTitle(x)); return;
+          closeSheet(); toast('Merged into ' + gLabel(x)); return;
         }
       }
       newGroup(data, assignIds); closeSheet(); toast('Group made'); return;
@@ -204,13 +204,13 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
     const cur = groupById(g.id) || g; const patch = {};
     if (eg) for (const k of [...FIELDS, 'raw', 'aiPending']) if (data[k] !== undefined && data[k] !== (cur[k] ?? (k === 'aiPending' ? false : ''))) patch[k] = data[k];
     for (const k of Object.keys(extra)) if (extra[k] !== (cur[k] ?? (k === 'tracking' ? '' : null))) patch[k] = extra[k];
-    if (Object.keys(patch).length) { upd('groups/' + g.id, patch); if (eg) saveBook({ ...cur, ...patch }); logEv(`edited ${gTitle({ ...cur, ...patch })} (${Object.keys(patch).join(', ')})`); }
+    if (Object.keys(patch).length) { upd('groups/' + g.id, patch); if (eg) saveBook({ ...cur, ...patch }); logEv(`edited ${gLabel({ ...cur, ...patch })} (${Object.keys(patch).join(', ')})`); }
     closeSheet(); toast('Saved');
   };
   const delb = F('del'); if (delb) delb.onclick = async () => {
     if (!(await ask('Delete this group? Its items go back to "not in a group".'))) return;
     itemsIn(g.id).forEach((i) => upd('items/' + i.id, { groupId: '' }));
-    del('groups/' + g.id); logEv(`deleted group ${gTitle(g)}`); closeSheet();
+    del('groups/' + g.id); logEv(`deleted group ${gLabel(g)}`); closeSheet();
   };
   if (!g && eg && !prefill) setTimeout(() => F('raw')?.focus(), 120);
   return sh;
@@ -228,7 +228,7 @@ export async function aiCheck(gid) {
 /* =================== pick group =================== */
 export function openPickGroup(ids) {
   // B4: sent groups are not offered.
-  const sh = sheet('Add to group', `<button class="btn primary wide" data-pg="__new" style="margin-bottom:10px">+ New group (paste address)</button><div class="gpick">${active().map((g) => `<button data-pg="${g.id}" style="--g:${gColor(g)}"><i></i>${esc(gTitle(g))} <span class="dim" style="font-weight:500">${esc(g.service || '')}</span></button>`).join('')}</div>`);
+  const sh = sheet('Add to group', `<button class="btn primary wide" data-pg="__new" style="margin-bottom:10px">+ New group (paste address)</button><div class="gpick">${active().map((g) => `<button data-pg="${g.id}" style="--g:${gColor(g)}"><i></i>${esc(gLabel(g))} <span class="dim" style="font-weight:500">${esc(g.service || '')}</span></button>`).join('')}</div>`);
   sh.querySelectorAll('[data-pg]').forEach((b) => (b.onclick = () => { closeSheet(); if (b.dataset.pg === '__new') openGroupSheet(null, ids); else moveItems(ids, b.dataset.pg); }));
 }
 
@@ -256,7 +256,7 @@ export function openViewer(id, order) {
  ${ph.length > 1 ? `<div class="vstrip">${ph.map((p, k) => `<img src="${p.t}" alt="Photo ${k + 1}" data-k="${k}" class="${k === st.ph ? 'on' : ''}">`).join('')}</div>` : ''}
  <div class="vnav"><button class="btn sm" data-nav="-1" ${idx <= 0 ? 'disabled' : ''}>Previous</button><b>${idx + 1} of ${st.order.length}</b><button class="btn sm" data-nav="1" ${idx < 0 || idx >= st.order.length - 1 ? 'disabled' : ''}>Next</button></div>
  ${can('name') ? `<div class="row" style="flex-wrap:nowrap;margin-bottom:10px"><input id="vw-name" class="grow" value="${esc(it.name || '')}" placeholder="Name, e.g. small grey sneakers"><input id="vw-qty" style="width:80px" inputmode="numeric" value="${esc(it.qty ?? '')}" placeholder="Qty"></div>` : `<p style="font-weight:700;font-size:18px">${esc(itemLabel(it))}</p>`}
- <div class="fld"><span class="lab">Group</span><div class="gpick">${can('group') ? `<button data-vg="" class="${!groupById(it.groupId) ? 'on' : ''}">Not in a group</button>${S.groups.filter((g) => !g.done || g.id === it.groupId).map((g) => `<button data-vg="${g.id}" class="${it.groupId === g.id ? 'on' : ''}" style="--g:${gColor(g)}"><i></i>${esc(gTitle(g))}</button>`).join('')}<button data-vg="__new">+ New group</button>` : esc(gTitle(groupById(it.groupId)) || 'Not in a group')}</div></div>
+ <div class="fld"><span class="lab">Group</span><div class="gpick">${can('group') ? `<button data-vg="" class="${!groupById(it.groupId) ? 'on' : ''}">Not in a group</button>${S.groups.filter((g) => !g.done || g.id === it.groupId).map((g) => `<button data-vg="${g.id}" class="${it.groupId === g.id ? 'on' : ''}" style="--g:${gColor(g)}"><i></i>${esc(gLabel(g))}</button>`).join('')}<button data-vg="__new">+ New group</button>` : esc(gLabel(groupById(it.groupId)) || 'Not in a group')}</div></div>
  <div class="row">${can('upload') && ph.length > 1 ? '<button class="btn sm" id="vw-split">Make this photo its own item</button>' : ''}${isAdmin() ? `<button class="btn sm danger" id="vw-delp">${ph.length > 1 ? 'Delete this photo' : 'Delete this item'}</button>` : ''}${pendingBadge(it._pending)}</div>`;
     morph(box, html);
     if (cur && !archived && st.loaded?.[0] !== cur.p) {
@@ -340,7 +340,7 @@ export function openCounter(id) {
     const g = groupById(id); if (!g) { closeTop(); return; }
     const its = itemsIn(id); const packed = g.packed || {}; const nPacked = its.filter((i) => packed[i.id]).length;
     const tu = trackUrl(g);
-    morph(d, `<div class="c-top"><span class="c-meth">${esc(g.service || 'Parcel')}</span><button class="c-x" data-cx>Close</button></div>
+    morph(d, `<div class="c-top"><span class="c-pno">${esc(pLabel(g))}</span><span class="c-meth">${esc(g.service || 'Parcel')}</span><button class="c-x" data-cx>Close</button></div>
  <div class="c-lab">Receiver</div><div class="c-name">${esc(g.name || 'No name given')}</div>
  <div class="c-lab">Phone, tap to copy</div><button class="c-phone" data-copy="${esc(g.phone || '')}">${esc(fmtPhone(g.phone) || 'No phone')}</button>${g.phone2 ? `<div class="c-addr">Also ${esc(fmtPhone(g.phone2))}</div>` : ''}
  <div class="row c-acts">${telLinks(g, true)}</div>
@@ -369,7 +369,7 @@ export function msgReceiver(gid) {
   const g = groupById(gid); if (!g) return;
   const num = waNumber(g.phone); if (!num) { toast('The receiver phone is not a mobile number.'); return; }
   window.open(`https://wa.me/${num}?text=${encodeURIComponent(waMessage(g))}`, '_blank', 'noopener');
-  logEv(`messaged ${gTitle(g)} on WhatsApp`);
+  logEv(`messaged ${gLabel(g)} on WhatsApp`);
 }
 
 /* =================== bulk paste & screenshot review (features 15, 16) =================== */
@@ -384,7 +384,7 @@ export function openBulk(initial) {
     if (!list.length) { box.innerHTML = '<p class="dim">No addresses found. Each parcel needs at least a phone number.</p>'; return; }
     box.innerHTML = `<div class="row" style="margin-bottom:8px"><span class="grow status">Check each one. Untick any you do not want.</span><button class="btn sm" id="bk-none">Untick all</button></div>${list.map((r, k) => {
       const k10 = phoneKey(r.phone); const dup = k10 && S.groups.find((x) => [x.phone, ...String(x.phone2 || '').split(',')].some((p) => phoneKey(p) === k10));
-      return `<div class="bk ${dup ? 'dup' : ''}" data-k="${k}"><label class="bk-ck"><input type="checkbox" ${dup ? '' : 'checked'} data-ck="${k}"></label><div class="grow"><div class="two"><input data-f="name" value="${esc(r.name)}" placeholder="Name"><input data-f="phone" value="${esc(r.phone)}" placeholder="Phone"></div><input data-f="address" value="${esc(r.address)}" placeholder="Address"><div class="two"><input data-f="city" value="${esc(r.city)}" placeholder="City" list="cities2"><input data-f="service" value="${esc(r.service)}" placeholder="Service"></div>${r.phone2 ? `<div class="dim" style="font-size:13px">Other phones: ${esc(r.phone2)}</div>` : ''}${dup ? `<div class="warn">Already on this flight: ${esc(gTitle(dup))}</div>` : ''}${missing(r).length ? `<div class="warn">Missing: ${missing(r).join(', ')}</div>` : ''}</div></div>`;
+      return `<div class="bk ${dup ? 'dup' : ''}" data-k="${k}"><label class="bk-ck"><input type="checkbox" ${dup ? '' : 'checked'} data-ck="${k}"></label><div class="grow"><div class="two"><input data-f="name" value="${esc(r.name)}" placeholder="Name"><input data-f="phone" value="${esc(r.phone)}" placeholder="Phone"></div><input data-f="address" value="${esc(r.address)}" placeholder="Address"><div class="two"><input data-f="city" value="${esc(r.city)}" placeholder="City" list="cities2"><input data-f="service" value="${esc(r.service)}" placeholder="Service"></div>${r.phone2 ? `<div class="dim" style="font-size:13px">Other phones: ${esc(r.phone2)}</div>` : ''}${dup ? `<div class="warn">Already on this flight: ${esc(gLabel(dup))}</div>` : ''}${missing(r).length ? `<div class="warn">Missing: ${missing(r).join(', ')}</div>` : ''}</div></div>`;
     }).join('')}<datalist id="cities2">${CITIES.map((c) => `<option value="${c}">`).join('')}</datalist><button class="btn primary wide" id="bk-make">Make groups</button>`;
     const upCount = () => { const n = box.querySelectorAll('[data-ck]:checked').length; box.querySelector('#bk-make').textContent = `Make ${plural(n, 'group')}`; };
     box.addEventListener('change', upCount); upCount();
@@ -469,7 +469,7 @@ function buildMD(f, items, groups) {
   Object.keys(by).sort(svcSort).forEach((k) => {
     L.push(`## ${k}`, '');
     by[k].forEach((g) => {
-      L.push(`### ${g.name || 'No name'}${g.done ? ' (sent)' : ''}`, '');
+      L.push(`### ${pLabel(g)} ${g.name || 'No name'}${g.done ? ' (sent)' : ''}`, '');
       [['Phone', fmtPhone(g.phone)], ['Second phone', fmtPhone(g.phone2)], ['Address', g.address], ['City', g.city], ['Service', g.service], ['Tracking', g.tracking], ['Weight kg', g.weight], ['Charges Rs', g.charges], ['Note', g.note]].forEach(([a, b]) => { if (b) L.push(`- ${a}: ${b}`); });
       const its = items.filter((i) => i.groupId === g.id); L.push(`- Items: ${its.length ? its.map(lab).join('; ') : 'none'}`, '');
     });
@@ -487,13 +487,13 @@ export async function downloadCSV(fid) {
   const f = S.flights.find((x) => x.id === fid); if (!f) return;
   try {
     const { items, groups } = await loadFlight(fid);
-    const rows = [['Service', 'Name', 'Phone', 'Other phones', 'Address', 'City', 'Items', 'Pieces', 'Tracking', 'Weight kg', 'Charges Rs', 'Status', 'Sent at', 'Note']];
+    const rows = [['Parcel', 'Service', 'Name', 'Phone', 'Other phones', 'Address', 'City', 'Items', 'Pieces', 'Tracking', 'Weight kg', 'Charges Rs', 'Status', 'Sent at', 'Note']];
     const st = (g) => [...STEPS].reverse().find(([k]) => g.steps?.[k])?.[1] || (g.done ? 'Sent' : 'Open');
-    groups.sort((a, b) => svcSort(svcKey(a.service), svcKey(b.service))).forEach((g) => {
+    groups.sort((a, b) => svcSort(svcKey(a.service), svcKey(b.service)) || (a.pn || 1e9) - (b.pn || 1e9)).forEach((g) => {
       const its = items.filter((i) => i.groupId === g.id);
-      rows.push([g.service, g.name, g.phone, g.phone2, g.address, g.city, its.map((i) => `${numLabel(i)} ${i.name || ''}`.trim()).join('; '), its.reduce((s, i) => s + qtyOf(i), 0), g.tracking, g.weight, g.charges, st(g), g.steps?.sent ? fmtTime(g.steps.sent.at) : '', g.note]);
+      rows.push([pLabel(g), g.service, g.name, g.phone, g.phone2, g.address, g.city, its.map((i) => `${numLabel(i)} ${i.name || ''}`.trim()).join('; '), its.reduce((s, i) => s + qtyOf(i), 0), g.tracking, g.weight, g.charges, st(g), g.steps?.sent ? fmtTime(g.steps.sent.at) : '', g.note]);
     });
-    items.filter((i) => !groups.some((g) => g.id === i.groupId)).forEach((i) => rows.push(['', '(not in a group)', '', '', '', '', `${numLabel(i)} ${i.name || ''}`, qtyOf(i), '', '', '', '', '', '']));
+    items.filter((i) => !groups.some((g) => g.id === i.groupId)).forEach((i) => rows.push(['', '', '(not in a group)', '', '', '', '', `${numLabel(i)} ${i.name || ''}`, qtyOf(i), '', '', '', '', '', '']));
     download(fileName(f, 'csv'), '﻿' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n'), 'text/csv');
   } catch (e) { console.warn(e); toast('The export could not be made.'); }
 }
