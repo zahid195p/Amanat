@@ -218,3 +218,23 @@ export const tripDue = (t, nowMs = Date.now()) => !t.released && typeof t.dueAt 
 export async function openTrip(request, env, t) {
   await fsPatch(request, env, 'tripsPrivate/' + t.id, { released: true, rel: t.dids || [], relAt: Date.now(), relBy: 'timer' });
 }
+// Several documents in one request (a function may make only ~50 requests).
+export async function fsMany(request, env, paths) {
+  if (!paths.length) return new Map();
+  const { emu, url } = fsRoot(request, env);
+  const base = url.replace(/^https?:\/\/[^/]+\/v1\//, ''); // projects/…/documents/apps/<space>
+  const r = await fetch(url.replace(/\/documents\/.*$/, '/documents:batchGet'), { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + (emu ? 'owner' : await accessToken(env)) }, body: JSON.stringify({ documents: paths.map((p) => `${base}/${p}`) }) });
+  if (!r.ok) throw new Error('database read failed: ' + r.status);
+  const out = new Map();
+  for (const x of await r.json()) if (x.found) { const d = docOf(x.found); out.set(x.found.name.split('/').slice(-2).join('/'), d); }
+  return out;
+}
+export async function fsWhereIn(request, env, coll, field, values) {
+  const out = [];
+  for (let k = 0; k < values.length; k += 30) {
+    const r = await fsFetch(request, env, ':runQuery', { method: 'POST', body: JSON.stringify({ structuredQuery: { from: [{ collectionId: coll }], where: { fieldFilter: { field: { fieldPath: field }, op: 'IN', value: enc(values.slice(k, k + 30)) } }, limit: 2000 } }) });
+    if (!r.ok) throw new Error('database query failed: ' + r.status);
+    out.push(...(await r.json()).filter((x) => x.document).map((x) => docOf(x.document)));
+  }
+  return out;
+}

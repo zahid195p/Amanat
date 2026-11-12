@@ -335,3 +335,16 @@ a.btn{text-decoration:none}
 .ph .recv{position:absolute;left:6px;top:30px;font-size:12px;font-weight:700;padding:2px 7px;border-radius:4px;color:#fff;background:var(--go)}
 .ph .recv.r-missing{background:var(--stop)}
 .ph .recv.r-damaged{background:#C75B12}
+
+/* step 3: client page */
+.cpage{max-width:720px;margin:0 auto}
+.cparcel{margin-bottom:12px}
+.citems{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;margin:8px 0}
+.cit{font-size:13px;font-weight:600;line-height:1.2}
+.cit img,.cit .noimg{display:block;width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:8px;background:var(--soft);margin-bottom:3px}
+.caddr{font-size:15px;margin:8px 0;padding-top:8px;border-top:1px solid var(--line)}
+.cslip{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
+.cslip a{color:var(--info);font-weight:700}
+.slipb{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:2px;min-height:44px}
+.slipb img{width:64px;height:64px;object-fit:cover;border-radius:6px}
+.rel.cl{color:var(--info)}

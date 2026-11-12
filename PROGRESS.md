@@ -60,7 +60,16 @@ only their own part; contacts reach a device only after the owner releases them.
 - Not done: which items are in which passenger's bags (items belong to the flight, not to a passenger).
 - `tests/e2e.mjs`: 81 checks.
 
+### Step 3: done, on the test site
+- A parcel is linked to a client with `cid` (group editor; picked automatically when the phone matches).
+  `cid`, `slipOk`, `pickOk` live in `groupsPrivate`.
+- Client page from `/api/portal`: own parcels across flights (items, photos, status, running totals),
+  slip and tracking once `slipOk` (or the `slipAuto` setting), dispatcher contact for Pickup parcels once
+  `pickOk`. `?slip=<id>` returns the full slip. POST `address` lets the client correct details until the
+  parcel is booked; the owner sees a "changed the delivery details" flag (`cEdit`).
+- The server batches reads (`fsMany`, `fsWhereIn`) to stay under the per-request limit.
+- `tests/e2e.mjs`: 97 checks.
+
 ### Next
-- Step 3: client page (server-rendered through a function, no database access).
 - Step 4: slips with AI matching, expenses.
 - Switch live to version 2: migrate root collections into `apps/live`, deploy to project `amanat`.

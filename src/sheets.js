@@ -53,6 +53,7 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
  <label class="fld"><span>Service (tap more than one for "TCS / Leopards")</span><input id="gs-service" value="${esc(d.service)}" placeholder="TCS" ${ro}></label>
  ${eg ? `<div class="chips" id="gs-chips" style="margin:-4px 0 12px">${SERVICES.map((s) => `<button class="chip" data-svc="${s}">${s}</button>`).join('')}</div>` : ''}
  <label class="fld"><span>Note</span><input id="gs-note" value="${esc(d.note)}" placeholder="Fragile, wrap well" ${ro}></label>
+ ${isAdmin() ? `<label class="fld"><span>Client (sees this parcel on their own page)</span><select id="gs-cid"><option value="">No client page</option>${S.people.filter((p) => p.role === 'client').map((p) => `<option value="${p.id}" ${d.cid === p.id ? 'selected' : ''}>${esc(p.name)}${p.phone ? ' · ' + esc(fmtPhone(p.phone)) : ''}</option>`).join('')}</select></label>` : ''}
  ${g && es ? `<div class="box"><div class="two"><label class="fld"><span>Tracking number</span><input id="gs-tracking" value="${esc(g.tracking || '')}" autocomplete="off"></label><div class="two"><label class="fld"><span>Weight kg</span><input id="gs-weight" inputmode="decimal" value="${esc(g.weight ?? '')}"></label><label class="fld"><span>Charges Rs</span><input id="gs-charges" inputmode="numeric" value="${esc(g.charges ?? '')}"></label></div></div>
    <div class="fld"><span class="lab">Status</span><div class="steps" id="gs-steps"></div></div>
    <div class="fld"><span class="lab">Booking slip photo</span><div class="row" id="gs-receipt"></div></div></div>` : ''}
@@ -102,7 +103,7 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
       const cv = F(k).value.trim();
       if (!cv) F(k).value = nv; else if (cv !== nv) diffs.push([k, nv]);
     }
-    showDiffs(diffs); checkDup();
+    showDiffs(diffs); checkDup(); pickClient?.();
   };
   const showDiffs = (diffs) => {
     const box = F('diff'); if (!box) return;
@@ -175,6 +176,9 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
   // Duplicate phone warning (feature 18).
   const dupOf = () => { const k = phoneKey(F('phone').value); if (!k) return null; return S.groups.find((x) => x.id !== g?.id && !x.done && [x.phone, ...String(x.phone2 || '').split(',')].some((p) => phoneKey(p) === k)); };
   const checkDup = () => { const box = F('dup'); if (!box) return; const x = dupOf(); box.innerHTML = x ? `<div class="note bad"><span>${esc(gLabel(x))} already has a group with this phone on this flight.</span></div>` : ''; };
+  // A phone number that belongs to a client picks that client.
+  const pickClient = () => { const sel = F('cid'); if (!sel || sel.value) return; const k = phoneKey(F('phone').value); const c = k && S.people.find((p) => p.role === 'client' && phoneKey(p.phone) === k); if (c) sel.value = c.id; };
+  F('phone').addEventListener('change', pickClient);
   checkDup();
   if (prefill) fill(prefill);
 
@@ -188,6 +192,7 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
       const cv = parseFloat(String(F('charges').value).replace(/,/g, '')); extra.charges = cv > 0 ? cv : null;
     }
     if (aiState) data.aiPending = !!aiState.pending && !aiState.ai;
+    if (F('cid')) data.cid = F('cid').value;
     if (!g) {
       const x = dupOf();
       if (x) {
@@ -203,7 +208,7 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
       newGroup(data, assignIds); closeSheet(); toast('Group made'); return;
     }
     const cur = groupById(g.id) || g; const patch = {};
-    if (eg) for (const k of [...FIELDS, 'raw', 'aiPending']) if (data[k] !== undefined && data[k] !== (cur[k] ?? (k === 'aiPending' ? false : ''))) patch[k] = data[k];
+    if (eg) for (const k of [...FIELDS, 'raw', 'aiPending', 'cid']) if (data[k] !== undefined && data[k] !== (cur[k] ?? (k === 'aiPending' ? false : ''))) patch[k] = data[k];
     for (const k of Object.keys(extra)) if (extra[k] !== (cur[k] ?? (k === 'tracking' ? '' : null))) patch[k] = extra[k];
     if (Object.keys(patch).length) { upd('groups/' + g.id, patch); if (eg) saveBook({ ...cur, ...patch }); logEv(`edited ${gLabel({ ...cur, ...patch })} (${Object.keys(patch).join(', ')})`); }
     closeSheet(); toast('Saved');
@@ -612,6 +617,7 @@ export function openMenu() {
    <label class="fld"><span>Sender phone, shown on the counter screen</span><input id="st-sender" type="tel" inputmode="tel" value="${esc(c.sender || '')}"></label>
    <label class="fld"><span>WhatsApp message to the receiver. Use {name} {service} {tracking} {pieces} {city} {sender}</span><textarea id="st-wa" style="min-height:70px">${esc(c.waTemplate || DEFAULT_WA)}</textarea></label>
    <div class="fld"><span class="lab">Tracking pages ({n} is the tracking number)</span>${['TCS', 'Leopards', 'Daewoo', 'Faisal Movers', 'Cargo'].map((s) => `<div class="row trk"><span>${s}</span><input class="grow" data-trk="${s}" value="${esc((c.trackUrls || {})[s] ?? DEFAULT_TRACK[s] ?? '')}" placeholder="https://…{n}"></div>`).join('')}</div>
+   <label class="tgl"><input type="checkbox" id="st-slip" ${c.slipAuto ? 'checked' : ''}> Show slips and tracking to clients as soon as they are added (otherwise I approve each one)</label>
    <label class="fld"><span>For a new passenger, open the contact with the dispatcher</span><select id="st-auto">${AUTO_CHOICES.map(([v, l]) => `<option value="${v ?? ''}" ${(c.autoMin === undefined ? 10 : c.autoMin) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
    <button class="btn wide" id="st-save">Save settings</button></div>
 ` : ''}
@@ -627,7 +633,7 @@ export function openMenu() {
   };
   const sv = sh.querySelector('#st-save'); if (sv) sv.onclick = () => {
     const trackUrls = {}; sh.querySelectorAll('[data-trk]').forEach((i) => (trackUrls[i.dataset.trk] = i.value.trim()));
-    w(setDoc(D('config/main'), { sender: sh.querySelector('#st-sender').value.trim(), waTemplate: sh.querySelector('#st-wa').value.trim() || DEFAULT_WA, trackUrls, autoMin: sh.querySelector('#st-auto').value === '' ? null : Number(sh.querySelector('#st-auto').value) }, { merge: true }));
+    w(setDoc(D('config/main'), { sender: sh.querySelector('#st-sender').value.trim(), waTemplate: sh.querySelector('#st-wa').value.trim() || DEFAULT_WA, trackUrls, slipAuto: sh.querySelector('#st-slip').checked, autoMin: sh.querySelector('#st-auto').value === '' ? null : Number(sh.querySelector('#st-auto').value) }, { merge: true }));
     toast('Settings saved');
   };
 }
@@ -740,4 +746,30 @@ export async function switchProfile() {
   closeAll(); S.sel.clear();
   unsubscribeAll();
   try { await signOut(auth); } catch (e) { /* ignore */ }
+}
+
+/* =================== the client's own page: change address, see a slip =================== */
+export function clientEdit(p, reload) {
+  const sh = sheet('Delivery details', `
+  <div class="two"><label class="fld"><span>Receiver name</span><input id="ce-name" value="${esc(p.name)}"></label><label class="fld"><span>Phone</span><input id="ce-phone" type="tel" inputmode="tel" value="${esc(p.phone)}"></label></div>
+  <label class="fld"><span>Address</span><textarea id="ce-address" style="min-height:70px">${esc(p.address)}</textarea></label>
+  <div class="two"><label class="fld"><span>City</span><input id="ce-city" list="ce-cities" value="${esc(p.city)}"></label><label class="fld"><span>Other phone</span><input id="ce-phone2" value="${esc(p.phone2)}"></label></div>
+  <datalist id="ce-cities">${CITIES.map((c) => `<option value="${c}">`).join('')}</datalist>
+  <div class="fld"><span class="lab">How do you want it sent?</span><div class="chips">${SERVICES.map((x) => `<button class="chip ${p.service.split('/').map((y) => y.trim()).includes(x) ? 'on' : ''}" data-svc="${x}">${x}</button>`).join('')}</div></div>
+  <label class="fld"><span>Note for us</span><input id="ce-note" value="${esc(p.note)}"></label>
+  <div class="status err" id="ce-err"></div><button class="btn primary wide" id="ce-save">Save</button>`);
+  sh.querySelectorAll('[data-svc]').forEach((b) => (b.onclick = () => b.classList.toggle('on')));
+  sh.querySelector('#ce-save').onclick = async () => {
+    const v = (k) => sh.querySelector('#ce-' + k).value.trim(); const err = sh.querySelector('#ce-err'); const btn = sh.querySelector('#ce-save');
+    btn.disabled = true; err.textContent = '';
+    try {
+      await api('portal', { action: 'address', id: p.id, name: v('name'), phone: v('phone'), phone2: v('phone2'), address: v('address'), city: v('city'), note: v('note'), service: [...sh.querySelectorAll('[data-svc].on')].map((b) => b.dataset.svc).join(' / ') });
+      closeSheet(); toast('Saved. Thank you.'); reload();
+    } catch (e) { err.textContent = e.offline ? 'No internet. Try again when connected.' : e.message; btn.disabled = false; }
+  };
+}
+export async function clientSlip(id) {
+  const sh = sheet('Booking slip', '<div class="vimg"><img id="ph-img" alt="Booking slip"></div><p class="dim" id="sl-st">Loading…</p>', { cls: 'wide' });
+  try { const r = await api('portal?slip=' + encodeURIComponent(id)); sh.querySelector('#ph-img').src = safeImg(r.d); sh.querySelector('#sl-st').textContent = ''; }
+  catch (e) { const st = sh.querySelector('#sl-st'); if (st) st.textContent = e.offline ? 'No internet.' : e.message; }
 }

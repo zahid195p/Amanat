@@ -63,7 +63,8 @@ function view() {
   if (!S.me) return !S.key && S.setup?.needed ? vSetup() : vLogin();
   const banner = S.me.viewAs ? `<div class="note view" data-key="viewas"><span>Viewing as <b>${esc(S.me.name)}</b> (${ROLE_LABEL[S.me.role]}). This is exactly what they can see. Nothing can be changed.</span><button class="btn sm" data-act="exitView">Stop viewing</button></div>` : '';
   if (S.me.role === 'passenger') return banner + vPassenger();
-  if (!isStaff()) return banner + `<div class="empty narrow"><h2>Hello ${esc(S.me.name)}</h2><p>Your page is being prepared. You will see your parcels here soon.</p></div>`;
+  if (S.me.role === 'client') return banner + vClient();
+  if (!isStaff()) return banner + `<div class="empty narrow"><h2>Hello ${esc(S.me.name)}</h2><p>Nothing to show.</p></div>`;
   return banner + staffView();
 }
 function staffView() {
@@ -178,6 +179,34 @@ function vPassenger() {
    <button class="btn" data-act="portalReload">Refresh</button></div>`;
 }
 
+/* ---------- the client's own page ---------- */
+const C_STATUS = { coming: 'On the way', arrived: 'Arrived, being prepared', packed: 'Packed', booked: 'Booked with courier', sent: 'Sent', delivered: 'Delivered' };
+function vClient() {
+  const p = S.portal;
+  if (!p) return '<div class="spin" aria-label="Loading"></div>';
+  if (p.error) return `<div class="empty narrow"><h2>Hello ${esc(S.me.name)}</h2><p>${esc(p.error)}</p><button class="btn" data-act="portalReload">Try again</button></div>`;
+  const ps = p.parcels || [];
+  if (!ps.length) return `<div class="empty narrow"><h2>Hello ${esc(S.me.name)}</h2><p>You have no parcels yet. They appear here when they are on a flight.</p><button class="btn" data-act="portalReload">Refresh</button></div>`;
+  // Things that come over several flights (15 seed packets, a few per flight): running totals.
+  const tot = new Map();
+  for (const x of ps) for (const i of x.items) { const k = i.name.trim().toLowerCase(); if (!k) continue; const t = tot.get(k) || { name: i.name.trim(), got: 0, sent: 0 }; t.got += i.qty; if (x.status === 'sent' || x.status === 'delivered') t.sent += i.qty; tot.set(k, t); }
+  const rows = [...tot.values()].filter((t) => t.got > 1).sort((a, b) => b.got - a.got);
+  let h = `<div class="cpage"><h1 style="font-size:30px">Hello ${esc(S.me.name)}</h1>`;
+  if (rows.length) h += `<div class="box" data-key="c-tot"><b>Your items so far</b><table class="dtab"><tr><th>Item</th><th>Arrived</th><th>Sent to you</th></tr>${rows.map((t) => `<tr><td>${esc(t.name)}</td><td>${t.got}</td><td>${t.sent}</td></tr>`).join('')}</table></div>`;
+  h += ps.map((x) => {
+    const tu = x.slip?.tracking ? trackUrl({ tracking: x.slip.tracking, service: x.service }) : '';
+    return `<div class="gcard cparcel st-${esc(x.status)}" data-key="cp-${esc(x.id)}" style="--g:${x.status === 'sent' || x.status === 'delivered' ? 'var(--go)' : 'var(--sign)'}">
+    <div class="gc-top"><span class="gc-name">${esc(x.flight.label)} <span class="dim" style="font-size:15px;font-family:var(--f-body)">${esc(fmtDate(x.flight.date))}</span></span><span class="svc">${esc(C_STATUS[x.status] || '')}</span></div>
+    ${x.items.length ? `<div class="citems">${x.items.map((i) => `<div class="cit">${i.t ? `<img src="${safeImg(i.t)}" alt="" loading="lazy">` : '<span class="noimg"></span>'}<span>${esc(i.name || 'Item')}${i.qty > 1 ? ' ×' + i.qty : ''}${i.recv === 'missing' ? ' <b class="warn">missing</b>' : i.recv === 'damaged' ? ' <b class="warn">damaged</b>' : ''}</span></div>`).join('')}</div>` : '<p class="dim">The items are not listed yet.</p>'}
+    <div class="caddr"><b>${esc(x.name || 'No name yet')}</b>${x.phone ? ' · ' + esc(fmtPhone(x.phone)) : ''}<br>${esc([x.address, x.city].filter(Boolean).join(', ') || 'No address yet')}<br><span class="dim">Send by: ${esc(x.service || 'not chosen yet')}</span></div>
+    ${x.canEdit ? `<button class="btn sm" data-act="clientEdit" data-id="${esc(x.id)}">Change address or service</button>` : ''}
+    ${x.slip ? `<div class="cslip">${x.slip.tracking ? `<span>Tracking <b>${esc(x.slip.tracking)}</b> <button class="ib" data-act="copy" data-v="${esc(x.slip.tracking)}" aria-label="Copy tracking number">${ICON.copy}</button>${tu ? ` <a href="${esc(tu)}" target="_blank" rel="noopener">Track</a>` : ''}</span>` : ''}${x.slip.has ? `<button class="slipb" data-act="clientSlip" data-id="${esc(x.id)}" aria-label="Open the booking slip">${x.slip.t ? `<img src="${safeImg(x.slip.t)}" alt="Booking slip">` : 'Open slip'}</button>` : ''}</div>` : ''}
+    ${x.pickup ? `<div class="cslip"><span class="grow"><b>Collect from:</b> ${x.pickup.length ? x.pickup.map((d) => `${esc(d.name)}${d.phone ? ' · ' + esc(fmtPhone(d.phone)) : ''} ${telLinks({ phone: d.phone })}`).join('<br>') : 'not chosen yet'}</span></div>` : ''}
+    </div>`;
+  }).join('');
+  return h + '<button class="btn" data-act="portalReload">Refresh</button></div>';
+}
+
 /* ---------- photos ---------- */
 function card(i) {
   const g = groupById(i.groupId); const sel = S.sel.has(i.id); const ph = i.photos || [];
@@ -202,6 +231,16 @@ export function releaseLine(g) {
     ? `<div class="rel on">Visible to dispatcher <button class="btn sm" data-act="release" data-id="${g.id}" data-on="0">Hide</button></div>`
     : `<div class="rel hid">Hidden from dispatcher <button class="btn sm" data-act="release" data-id="${g.id}" data-on="1">Show</button></div>`;
 }
+// Owner: whose parcel this is, and what that client may see on their page.
+export function clientLine(g) {
+  if (!isAdmin() || g.locked || !g.cid) return '';
+  const c = S.people.find((p) => p.id === g.cid);
+  let h = `<div class="rel cl">Client: ${esc(c?.name || 'removed')}${g.cEdit ? ` <span class="warn">changed the delivery details</span> <button class="btn sm" data-act="cEditOk" data-id="${g.id}">OK</button>` : ''}</div>`;
+  const tg = (key, on, what) => `<div class="rel ${on ? 'on' : 'hid'}">${what} ${on ? 'visible to client' : 'hidden from client'} <button class="btn sm" data-act="clientShow" data-id="${g.id}" data-k="${key}" data-on="${on ? 0 : 1}">${on ? 'Hide' : 'Show'}</button></div>`;
+  if ((g.tracking || g.receipt) && !S.cfg.slipAuto) h += tg('slipOk', g.slipOk, 'Slip and tracking');
+  if (/pickup/i.test(g.service || '')) h += tg('pickOk', g.pickOk, 'Dispatcher contact (pickup)');
+  return h;
+}
 export function groupCard(g, compact) {
   const its = itemsIn(g.id); const m = missing(g); const n = compact ? 8 : 16;
   const svcs = String(g.service || '').split('/').map((s) => s.trim()).filter(Boolean);
@@ -210,7 +249,7 @@ export function groupCard(g, compact) {
  <div class="gc-sub">${esc([g.city, fmtPhone(g.phone)].filter(Boolean).join(', ') || (g.locked ? '' : 'No phone or city'))}</div>
  ${!compact && g.address ? `<div style="font-size:15px">${esc(g.address)}</div>` : ''}
  ${m.length ? `<div class="warn">Missing: ${m.join(', ')}</div>` : ''}
- ${releaseLine(g)}
+ ${releaseLine(g)}${clientLine(g)}
  ${g.aiPending ? `<div class="aip">AI check pending${S.online && aiAllowed() ? ` <button class="btn sm" data-act="aiCheck" data-id="${g.id}">Check now</button>` : ''}</div>` : ''}
  ${its.length ? `<div class="gthumbs">${its.slice(0, n).map((i) => `<img src="${safeImg(i.photos?.[0]?.t || '')}" alt="${esc(itemLabel(i))}" title="${esc(itemLabel(i))}" loading="lazy">`).join('')}${its.length > n ? `<span class="dim">+${its.length - n}</span>` : ''}</div><div class="dim" style="font-size:14px">${esc(its.map(itemLabel).join(', '))}</div>` : `<div class="dim" style="font-size:14px;margin:6px 0">${g.done ? 'No items' : 'Drop items here'}</div>`}
  <div class="row" style="margin-top:8px">${S.sel.size && !g.done && can('group') ? `<button class="btn sm primary" data-act="addSelTo" data-id="${g.id}">Add ${S.sel.size} here</button>` : ''}${telLinks(g)}${can('group') || can('send') ? `<button class="btn sm" data-act="editGroup" data-id="${g.id}">Edit</button>` : ''}${can('send') ? `<button class="btn sm ${g.done ? '' : 'dark'}" data-act="toggleDone" data-id="${g.id}">${g.done ? 'Undo sent' : 'Mark sent'}</button>` : ''}</div></div>`;
@@ -313,7 +352,7 @@ function parcel(g, k) {
   const step = [...STEPS].reverse().find(([s]) => g.steps?.[s]);
   return `<div class="parcel ${g.done ? 'done' : ''}" data-key="p-${g.id}" data-big="${g.id}" style="--g:${gColor(g)}">${can('send') ? `<button class="pk" data-act="toggleDone" data-id="${g.id}" aria-label="${g.done ? 'Mark not sent' : 'Mark sent'}">${g.done ? '✓' : ''}</button>` : `<span class="pk">${g.done ? '✓' : ''}</span>`}
    <span class="p-name"><span class="pno">${esc(pLabel(g))}</span> ${esc(gTitle(g))}${g.phone ? ` <span style="font-weight:600">${esc(fmtPhone(g.phone))}</span>` : ''}${g.phone2 ? `<span class="dim" style="font-weight:500">, ${esc(fmtPhone(g.phone2))}</span>` : ''}${pendingBadge(g._pending)}${svcs.length > 1 && svcs[0] === k ? ` <span class="svc alt">or ${esc(svcs.slice(1).join(' / '))}</span>` : ''}</span>
-   <div class="p-addr">${esc(g.address || '')}${g.city ? `, <b>${esc(g.city)}</b>` : ''}${g.note ? `<div class="dim">${esc(g.note)}</div>` : ''}${m.length ? `<div class="warn">Missing: ${m.join(', ')}</div>` : ''}${releaseLine(g)}
+   <div class="p-addr">${esc(g.address || '')}${g.city ? `, <b>${esc(g.city)}</b>` : ''}${g.note ? `<div class="dim">${esc(g.note)}</div>` : ''}${m.length ? `<div class="warn">Missing: ${m.join(', ')}</div>` : ''}${releaseLine(g)}${clientLine(g)}
    ${g.tracking || g.weight || g.charges || step ? `<div class="p-meta">${step ? `<span class="stp">${esc(step[1])}</span>` : ''}${g.tracking ? `<span>Tracking <b>${esc(g.tracking)}</b> <button class="ib" data-act="copy" data-v="${esc(g.tracking)}" aria-label="Copy tracking number">${ICON.copy}</button>${tu ? ` <a href="${esc(tu)}" target="_blank" rel="noopener">Track</a>` : ''}</span>` : ''}${g.weight ? `<span>${esc(g.weight)} kg</span>` : ''}${g.charges ? `<span>Rs ${Number(g.charges).toLocaleString('en-PK')}</span>` : ''}</div>` : ''}</div>
    <div class="p-items">${its.length ? its.map((i) => `<span><img src="${safeImg(i.photos?.[0]?.t || '')}" alt="" loading="lazy">${esc(itemLabel(i))}</span>`).join('') : '<span class="warn" style="background:none">No items in this group</span>'}</div><div class="row" style="grid-column:2;margin-top:4px"><button class="btn sm" data-act="counter" data-id="${g.id}">Show big</button>${telLinks(g)}${g.done && isMobile(g.phone) ? `<button class="btn sm" data-act="msgReceiver" data-id="${g.id}">Message receiver</button>` : ''}${can('group') || can('send') ? `<button class="btn sm" data-act="editGroup" data-id="${g.id}">Edit</button>` : ''}</div></div>`;
 }

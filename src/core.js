@@ -24,6 +24,8 @@ export const ROLE_LABEL = { dev: 'Developer', owner: 'Owner', dispatcher: 'Dispa
 const DISPATCHER_CAN = { upload: true, name: true, send: true, ai: true };
 // Receiver details live in a separate locked document (groupsPrivate) until the owner releases them.
 export const PRIVATE_FIELDS = ['name', 'phone', 'phone2', 'address', 'raw'];
+// Also in the locked document: the client this parcel belongs to, and what that client may see.
+const PRIVATE_EXTRA = ['cid', 'slipOk', 'pickOk'];
 export const DEFAULT_WA = 'Assalam o Alaikum {name}. Your parcel was sent by {service}, tracking # {tracking}, {pieces} pieces.';
 export const DEFAULT_TRACK = {
   TCS: 'https://www.tcsexpress.com/track/{n}',
@@ -271,7 +273,7 @@ export function w(p, what) {
 // Group writes are split: receiver details go to the locked groupsPrivate document.
 function splitGroup(data) {
   const pub = {}, priv = {};
-  for (const [k, v] of Object.entries(data)) (PRIVATE_FIELDS.includes(k) ? priv : pub)[k] = v;
+  for (const [k, v] of Object.entries(data)) (PRIVATE_FIELDS.includes(k) || PRIVATE_EXTRA.includes(k) ? priv : pub)[k] = v;
   return [pub, priv];
 }
 const isGroup = (path) => path.startsWith('groups/');
@@ -392,6 +394,7 @@ function mergeGroups() {
     if (!p) return { ...g, locked: true };
     const o = { ...g, released: !!p.released, _pending: g._pending || p._pending };
     for (const k of PRIVATE_FIELDS) o[k] = p[k] ?? '';
+    o.cid = p.cid || ''; o.slipOk = !!p.slipOk; o.pickOk = !!p.pickOk;
     return o;
   }).sort((a, b) => (a.pn || 1e9) - (b.pn || 1e9) || (a.at || 0) - (b.at || 0));
   countPending(); schedule();
@@ -448,7 +451,7 @@ export function newGroup(data, assignIds = []) {
   const id = rid();
   const ptmp = S.groups.reduce((m, g) => Math.max(m, g.pn || 0, g.ptmp || 0), 0) + 1 + (S.gBump - 1);
   put('groups/' + id, {
-    fid: S.fid, dids: curFlight()?.dids || [], ci, pn: null, ptmp, ...clean, raw: data.raw || '', done: false, at: now(), by: S.me.uid,
+    fid: S.fid, dids: curFlight()?.dids || [], ci, pn: null, ptmp, ...clean, cid: data.cid || '', raw: data.raw || '', done: false, at: now(), by: S.me.uid,
     aiPending: !!data.aiPending, tracking: '', weight: null, charges: null,
     steps: { arrived: { at: now(), by: S.me.uid } }, packed: {},
   });
