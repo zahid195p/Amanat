@@ -14,142 +14,217 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(page, fn, arg, ms = 15000) {
   try { await page.waitForFunction(fn, arg, { timeout: ms }); return true; } catch { return false; }
 }
+const text = (page) => page.evaluate(() => document.body.innerText);
 
-const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' }).catch(() => chromium.launch());
-const A = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-const a = await A.newPage();
+const browser = await chromium.launch();
 const errs = [];
-a.on('pageerror', (e) => errs.push('A: ' + e.message));
-a.on('console', (m) => { if (m.type() === 'error') errs.push('A console: ' + m.text()); });
+async function open(w, h, mobile) {
+  const ctx = await browser.newContext({ viewport: { width: w, height: h }, isMobile: !!mobile, hasTouch: !!mobile });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => errs.push(e.message));
+  return [ctx, page];
+}
+// Add a person from the developer/owner screen and return their link key and code.
+async function addPerson(page, name, role) {
+  if (!(await page.$('#pp-name'))) { await page.click('[data-act=menu]'); await page.click('[data-act=people]'); }
+  await page.fill('#pp-name', name); await page.selectOption('#pp-role', role);
+  await page.click('#pp-add');
+  await page.waitForSelector('#cp-text[data-key]');
+  const r = await page.evaluate(() => { const t = document.querySelector('#cp-text'); return { key: t.dataset.key, pin: t.dataset.pin, text: t.value }; });
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#cp-text'));
+  return r;
+}
+async function login(page, key, pin) {
+  await page.goto(URL + '#k=' + key);
+  await page.waitForSelector('#pin-in');
+  await page.fill('#pin-in', pin); await page.click('[data-act=login]');
+}
 
-// 1. Setup
+/* ---------- 1. setup: the developer ---------- */
+const [A, a] = await open(1280, 900);
 await a.goto(URL);
-ok(await until(a, () => !!document.querySelector('#su-name')), 'setup screen shows');
+ok(await until(a, () => !!document.querySelector('#su-name')), 'setup screen shows on a fresh install');
+ok(!/Tayyab|Who is using/.test(await text(a)), 'no list of people on the first screen');
 await a.fill('#su-name', 'Zahid');
-await a.fill('#su-code', '4321zz'); await a.fill('#su-code2', '4321zz'); await a.fill('#su-key', 'wrong');
+await a.fill('#su-code', 'dev-code-1'); await a.fill('#su-code2', 'dev-code-1'); await a.fill('#su-key', 'wrong');
 await a.click('[data-act=setup]');
-ok(await until(a, () => /setup key/i.test(document.querySelector('#login-err')?.textContent || '')), 'wrong setup key refused');
-await a.fill('#su-key', 'test-setup-key'); await a.fill('#su-code', '4321zz'); await a.fill('#su-code2', '4321zz');
-await a.click('[data-act=setup]');
-ok(await until(a, () => /No flight yet/.test(document.body.innerText)), 'admin logged in after setup');
-
-// 2. Flight
-await a.click('[data-act=flights]');
-await a.fill('#nf-label', 'PK 853');
-await a.click('[data-act=createFlight]');
-ok(await until(a, () => /PK 853/.test(document.querySelector('#hdr').innerText)), 'flight created');
-
-// 3. Upload photos
-await a.setInputFiles('input[data-up][multiple]', [1, 2, 3, 4].map((n) => `${IMG}/p${n}.jpg`));
-ok(await until(a, () => document.querySelectorAll('.card').length === 4), '4 photo cards appear');
-ok(await until(a, () => [...document.querySelectorAll('.card .num')].map((x) => x.textContent).sort().join() === '#1,#2,#3,#4', null, 20000), 'items numbered #1-#4');
-await a.setInputFiles('input[data-up][multiple]', [`${IMG}/bad.heic`]);
-ok(await until(a, () => /bad\.heic/.test(document.body.innerText)), 'HEIC failure names the file (B10)');
-
-// 4. Name item, make group by paste
-await a.fill('.card:nth-child(1) .nm', 'black shoes');
-await wait(800);
-await a.click('.card:nth-child(1) .ph'); await a.click('.card:nth-child(2) .ph', { modifiers: ['Shift'] });
-ok(await until(a, () => document.querySelectorAll('.card.sel').length === 2), 'shift-click range select');
-await a.click('#selbar [data-act=selToGroup]');
-await a.click('[data-pg=__new]');
-await a.fill('#gs-raw', 'Qasim Imtiaz\n03161749964\nWasu Road Near Chungi Number 8 Mandi Bahauddin\nTCS / Leopards');
-await a.click('#gs-read');
-ok(await until(a, () => document.querySelector('#gs-phone')?.value === '03161749964' && document.querySelector('#gs-city')?.value === 'Mandi Bahauddin', null, 1500), 'basic reader fills the fields instantly');
-await a.click('#gs-save');
-ok(await until(a, () => /Qasim Imtiaz/.test(document.querySelector('.gpanel')?.innerText || '')), 'group made with 2 items');
-ok(await until(a, () => document.querySelector('.gpanel .pno')?.textContent === 'P1'), 'first parcel gets number P1');
-ok(await until(a, () => [...document.querySelectorAll('.card .gtag')].some((x) => x.textContent.startsWith('P1 '))), 'photo cards show the parcel number');
-await a.click('[data-act=tab][data-v=service]');
-ok(await until(a, () => { const s = document.querySelector('[data-key="sec-TCS"]'); return s && /Qasim/.test(s.innerText) && /or Leopards/.test(s.innerText); }), 'combined service listed under TCS with tag (B5)');
-ok(await a.evaluate(() => !!document.querySelector('a[href^="https://wa.me/923161749964"]') && !!document.querySelector('a[href^="tel:03161749964"]')), 'tel and WhatsApp links');
-
-// 5. Duplicate phone warning
-await a.click('[data-act=tab][data-v=groups]');
-await a.click('[data-act=newGroupSel]');
-await a.fill('#gs-phone', '0316 1749964'); await a.dispatchEvent('#gs-phone', 'change');
-ok(await until(a, () => /already has a group with this phone/.test(document.querySelector('#gs-dup')?.innerText || '')), 'duplicate phone warning');
-ok(await until(a, () => document.querySelector('#gs-name')?.value === 'Qasim Imtiaz'), 'address book fills name from phone');
+ok(await until(a, () => /setup phrase/i.test(document.querySelector('#login-err')?.textContent || '')), 'wrong setup phrase refused');
+await a.fill('#su-key', 'test-setup-key'); await a.click('[data-act=setup]');
+ok(await until(a, () => /Your private link/.test(document.body.innerText)), 'developer made; private link shown');
+const devLink = await a.inputValue('#cp-text');
 await a.keyboard.press('Escape');
+ok(await until(a, () => /TEST/.test(document.querySelector('#hdr').innerText)), 'test site is marked TEST');
 
-// 6. Mark sent with undo
-await a.click('[data-act=tab][data-v=service]');
-await a.click('.parcel .pk');
-ok(await until(a, () => /marked sent/.test(document.querySelector('#toasts').innerText)), 'mark sent toast');
-await a.click('#toasts .undo');
-ok(await until(a, () => !document.querySelector('.parcel.done') && document.querySelectorAll('.parcel').length === 1), 'undo mark sent (B9)');
+/* ---------- 2. people: owner, two dispatchers, a client ---------- */
+const owner = await addPerson(a, 'Tayyab bhai', 'owner');
+ok(/#k=/.test(owner.text) && /Code: \d{6}/.test(owner.text), 'invite has a private link and a 6-digit code');
+const d1 = await addPerson(a, 'Bilal', 'dispatcher');
+const d2 = await addPerson(a, 'Other City', 'dispatcher');
+const cl = await addPerson(a, 'Abdullah', 'client');
+await a.keyboard.press('Escape'); await a.keyboard.press('Escape');
 
-// 7. Add sorter profile
-await a.click('[data-act=menu]');
-await a.click('[data-act=addProfile]');
-await a.fill('#pf-name', 'Tayyab bhai'); await a.fill('#pf-code', '5555');
-await a.click('#pf-save');
-ok(await until(a, () => /Profile added/.test(document.querySelector('#toasts').innerText)), 'sorter profile added');
-await a.keyboard.press('Escape');
+/* ---------- 3. owner logs in with link + code and prepares a flight ---------- */
+const [O, o] = await open(1280, 900);
+await o.goto(URL + '#k=' + owner.key);
+ok(await until(o, () => /Hello Tayyab bhai/.test(document.body.innerText)), 'link greets the owner by name');
+await o.fill('#pin-in', '000000'); await o.click('[data-act=login]');
+ok(await until(o, () => /not right/.test(document.querySelector('#login-err')?.textContent || '')), 'wrong code refused');
+await o.fill('#pin-in', owner.pin); await o.click('[data-act=login]');
+ok(await until(o, () => /No flight yet/.test(document.body.innerText)), 'owner logged in');
+ok(await o.evaluate(() => !location.hash), 'the key is removed from the address bar');
+await o.click('[data-act=flights]'); await o.fill('#nf-label', 'PK 853'); await o.click('[data-act=createFlight]');
+ok(await until(o, () => /PK 853/.test(document.querySelector('#hdr').innerText)), 'flight created');
+await o.setInputFiles('input[data-up][multiple]', [1, 2, 3, 4].map((n) => `${IMG}/p${n}.jpg`));
+ok(await until(o, () => [...document.querySelectorAll('.card .num')].map((x) => x.textContent).sort().join() === '#1,#2,#3,#4', null, 25000), '4 items numbered #1-#4');
+await o.setInputFiles('input[data-up][multiple]', [`${IMG}/bad.heic`]);
+ok(await until(o, () => /bad\.heic/.test(document.body.innerText)), 'HEIC failure names the file');
+await o.click('.card:nth-child(1) .ph'); await o.click('.card:nth-child(2) .ph', { modifiers: ['Shift'] });
+ok(await until(o, () => document.querySelectorAll('.card.sel').length === 2), 'shift-click range select');
+await o.click('#selbar [data-act=selToGroup]'); await o.click('[data-pg=__new]');
+await o.fill('#gs-raw', 'Qasim Imtiaz\n03161749964\nWasu Road Near Chungi Number 8 Mandi Bahauddin\nTCS / Leopards');
+await o.click('#gs-read');
+ok(await until(o, () => document.querySelector('#gs-phone')?.value === '03161749964' && document.querySelector('#gs-city')?.value === 'Mandi Bahauddin', null, 1500), 'address fills in instantly');
+await o.click('#gs-save');
+ok(await until(o, () => document.querySelector('.gpanel .pno')?.textContent === 'P1' && /Qasim Imtiaz/.test(document.querySelector('.gpanel').innerText)), 'parcel P1 made for Qasim');
+ok(await until(o, () => /Hidden from dispatcher/.test(document.querySelector('.gpanel').innerText)), 'new parcel starts hidden from the dispatcher');
+// second parcel
+await o.click('[data-act=tab][data-v=groups]'); await o.click('[data-act=newGroupSel]');
+await o.fill('#gs-raw', 'Sana Bibi\n0345 1234567\nHouse 5 Gulberg III Lahore\nDaewoo'); await o.click('#gs-read'); await wait(300); await o.click('#gs-save');
+ok(await until(o, () => document.querySelectorAll('.gcard .pno').length === 2 && ![...document.querySelectorAll('.gcard .pno')].some((x) => x.textContent.includes('~'))), 'second parcel numbered P2');
+// put Bilal on the flight
+await o.click('[data-act=flights]');
+await o.click('[data-disp] >> text=Bilal');
+ok(await until(o, () => /Bilal can now see/.test(document.querySelector('#toasts').innerText)), 'dispatcher Bilal added to the flight');
+await o.keyboard.press('Escape');
 
-// 8. Second device (iPhone size) logs in as sorter
-const B = await browser.newContext({ viewport: { width: 375, height: 760 }, isMobile: true, hasTouch: true });
-const b = await B.newPage();
-b.on('pageerror', (e) => errs.push('B: ' + e.message));
+/* ---------- 4. dispatcher: sees the work, not the receivers ---------- */
+const [B, b] = await open(375, 760, true);
 await b.goto(URL);
-ok(await until(b, () => /Tayyab bhai/.test(document.body.innerText)), 'login card for sorter');
-await b.click('text=Tayyab bhai');
-await b.fill('#pin-in', '1111'); await b.click('[data-act=login]');
-ok(await until(b, () => /not right/.test(document.querySelector('#login-err')?.textContent || '')), 'wrong code refused');
-await b.fill('#pin-in', '5555'); await b.click('[data-act=login]');
-ok(await until(b, () => document.querySelectorAll('.card').length >= 2 || /Every item|not in any group/.test(document.body.innerText)), 'sorter sees the flight');
-ok(await b.evaluate(() => !document.querySelector('.del') && !document.querySelector('[data-up]')), 'sorter has no delete or upload (B2)');
-ok(await b.evaluate(() => document.documentElement.scrollWidth <= 375), 'no horizontal scroll at 375px');
-
-// 9. Live sync A -> B
-await a.click('[data-act=tab][data-v=photos]');
-await a.click('[data-act=show][data-v=all]');
-await a.fill('.card:nth-child(3) .nm', 'red bag');
-await b.click('[data-act=show][data-v=all]');
-ok(await until(b, () => /red bag/.test(document.body.innerText), null, 10000), 'name syncs to the other device');
-
-// 10. Offline on A
-await A.setOffline(true);
-await a.evaluate(() => window.dispatchEvent(new Event('offline')));
-ok(await until(a, () => /Offline/.test(document.querySelector('#hdr').innerText)), 'pill shows Offline');
-await a.setInputFiles('input[data-up][multiple]', [5, 6].map((n) => `${IMG}/p${n}.jpg`));
-ok(await until(a, () => [...document.querySelectorAll('.card .num')].some((x) => x.textContent.startsWith('#~'))), 'offline items get temporary numbers #~');
-ok(await until(a, () => document.querySelectorAll('.card .pend').length >= 2), 'waiting-to-upload badges shown');
-await a.fill('.card:nth-child(4) .nm', 'offline name');
-await wait(900);
-await a.click('[data-act=tab][data-v=groups]');
-await a.click('[data-act=newGroupSel]');
-await a.fill('#gs-raw', 'Ali Khan 0300 1234567 House 12 Street 4 Lahore TCS');
-await a.click('#gs-read');
-await wait(300);
-await a.click('#gs-save');
-ok(await until(a, () => /Ali Khan/.test(document.body.innerText)), 'group made offline');
-await a.reload();
-ok(await until(a, () => /Ali Khan/.test(document.body.innerText), null, 20000), 'after offline reload, offline group is still there');
-await a.click('[data-act=tab][data-v=photos]').catch(() => {});
-ok(await until(a, () => document.querySelectorAll('.card').length >= 6, null, 15000), 'after offline reload, offline photos still there');
-await a.screenshot({ path: `${shots}/a-offline.png` });
-await A.setOffline(false);
-await a.evaluate(() => window.dispatchEvent(new Event('online')));
-ok(await until(a, () => /Online/.test(document.querySelector('#hdr').innerText) && !document.querySelector('.card .pend'), null, 40000), 'back online: everything synced, badges clear');
-ok(await until(a, () => ![...document.querySelectorAll('.card .num')].some((x) => x.textContent.startsWith('#~')), null, 20000), 'temporary numbers replaced by real ones');
-ok(await until(b, () => /Ali Khan/.test(document.body.innerText) || (document.querySelector('[data-act=tab][data-v=groups]')?.click(), false), null, 20000), 'offline work reaches the other device');
-const nums = await a.evaluate(() => [...document.querySelectorAll('.card .num')].map((x) => x.textContent));
-ok(new Set(nums).size === nums.length, 'no duplicate item numbers: ' + nums.join(' '));
-await a.click('[data-act=tab][data-v=groups]');
-ok(await until(a, () => { const p = [...document.querySelectorAll('.gcard .pno')].map((x) => x.textContent); return p.length >= 2 && !p.some((x) => x.includes('~')) && new Set(p).size === p.length; }, null, 20000), 'offline parcel got a real, unique number');
-
-// 11. Counter + back gesture
+ok(await until(b, () => /Open your private link/.test(document.body.innerText)) && !/Tayyab|Bilal|Zahid|Abdullah/.test(await text(b)), 'without a link: no names, only "open your private link"');
+await login(b, d1.key, d1.pin);
+ok(await until(b, () => document.querySelectorAll('.card').length === 4, null, 20000), 'dispatcher sees the 4 items of his flight');
 await b.click('[data-act=tab][data-v=service]');
-await b.click('[data-act=counter]');
+ok(await until(b, () => document.querySelectorAll('.parcel').length === 2), 'dispatcher sees both parcels');
+let bt = await text(b);
+ok(/P1/.test(bt) && /TCS/.test(bt) && /Mandi Bahauddin/.test(bt), 'dispatcher sees parcel number, service and city');
+ok(!/Qasim|0316|Wasu Road|Sana|0345|Gulberg/.test(bt), 'receiver name, phone and address are NOT on the dispatcher screen');
+ok(/not released yet/.test(bt), 'dispatcher is told the details are not released yet');
+const ids = await b.evaluate(() => window.__t.ids());
+const direct = await b.evaluate(async (g) => ({
+  priv: await window.__t.get('groupsPrivate/' + g),
+  privList: await window.__t.list('groupsPrivate'),
+  people: await window.__t.list('people'),
+  book: await window.__t.list('book'),
+  delItem: await window.__t.del('items/' + window.__t.ids().items[0]),
+  regroup: await window.__t.upd('items/' + window.__t.ids().items[0], { groupId: 'x' }),
+  flight: await window.__t.upd('flights/' + window.__t.ids().fid, { label: 'hacked' }),
+  svc: await window.__t.upd('groups/' + g, { service: 'x' }),
+}), ids.groups[0]);
+ok(direct.priv === 'permission-denied' && direct.privList === 'permission-denied', 'going around the app: receiver details are refused by the database (' + direct.priv + ')');
+ok(direct.people === 'permission-denied' && direct.book === 'permission-denied', 'going around the app: people list and address book refused');
+ok(direct.delItem === 'permission-denied' && direct.regroup === 'permission-denied', 'going around the app: dispatcher cannot delete or regroup items');
+ok(direct.flight === 'permission-denied' && direct.svc === 'permission-denied', 'going around the app: dispatcher cannot change the flight or a parcel\'s service');
+ok(await b.evaluate(() => !document.querySelector('.del') && document.documentElement.scrollWidth <= 375), 'no delete buttons; fits a 375px phone');
+
+/* ---------- 5. a dispatcher who is not on the flight sees nothing ---------- */
+const [X, x] = await open(375, 760, true);
+await login(x, d2.key, d2.pin);
+ok(await until(x, () => /not on any flight/.test(document.body.innerText)), 'other dispatcher: "not on any flight"');
+const xd = await x.evaluate(async (i) => [await window.__t.get('flights/' + i.fid), await window.__t.get('items/' + i.items[0]), await window.__t.get('groups/' + i.groups[0])], ids);
+ok(xd.every((r) => r === 'permission-denied'), 'other dispatcher: flight, items and parcels refused by the database');
+await X.close();
+
+/* ---------- 6. release one parcel ---------- */
+await o.click('[data-act=tab][data-v=service]');
+await o.click('[data-key="sec-TCS"] [data-act=release]');
+ok(await until(b, () => /Qasim Imtiaz/.test(document.body.innerText) && /0316 1749964/.test(document.body.innerText), null, 15000), 'after release: dispatcher sees Qasim and his phone');
+bt = await text(b);
+ok(!/Sana|0345|Gulberg/.test(bt), 'the parcel that was not released stays hidden');
+ok(await b.evaluate(() => !!document.querySelector('a[href^="https://wa.me/923161749964"]') && !!document.querySelector('a[href^="tel:03161749964"]')), 'call and WhatsApp buttons appear for the released receiver');
+// dispatcher works: mark sent, with undo, and tracking
+await b.click('.parcel .pk');
+ok(await until(o, () => !!document.querySelector('[data-act=openSent]') || /1 sent/.test(document.body.innerText), null, 15000), 'dispatcher marks P1 sent; owner sees it');
+await b.click('#toasts .undo');
+ok(await until(o, () => document.querySelectorAll('.parcel:not(.done)').length === 2, null, 15000), 'undo mark sent syncs back');
+// hide again
+await o.click('[data-key="sec-TCS"] [data-act=release]');
+ok(await until(b, () => !/Qasim/.test(document.body.innerText), null, 15000), 'owner hides it again: gone from the dispatcher screen');
+await o.click('[data-act=releaseSvc][data-v=Daewoo]');
+ok(await until(b, () => /Sana Bibi/.test(document.body.innerText), null, 15000), '"Show all Daewoo to dispatcher" releases that courier\'s parcels');
+
+/* ---------- 7. view as ---------- */
+await a.reload();
+ok(await until(a, () => /PK 853/.test(document.querySelector('#hdr').innerText), null, 15000), 'developer sees the flight the owner made');
+await a.click('[data-act=tab][data-v=service]');
+ok(await until(a, () => /Qasim Imtiaz/.test(document.body.innerText) && /Sana Bibi/.test(document.body.innerText)), 'developer sees every receiver');
+await a.click('[data-act=menu]'); await a.click('[data-act=people]');
+await a.click('.prow:has-text("Bilal") [data-pp]'); await a.click('#mp-view');
+ok(await until(a, () => /Viewing as Bilal/.test(document.body.innerText), null, 15000), 'view-as banner shows');
+await a.click('[data-act=tab][data-v=service]').catch(() => {});
+ok(await until(a, () => /Sana Bibi/.test(document.body.innerText) && document.querySelectorAll('.parcel').length === 2, null, 15000), 'view-as shows what Bilal sees (released parcel)');
+ok(!/Qasim|0316/.test(await text(a)), 'view-as hides what Bilal cannot see');
+const vw = await a.evaluate(async (i) => [await window.__t.get('groupsPrivate/' + i.groups[0]), await window.__t.upd('groups/' + i.groups[0], { done: true })], ids);
+ok(vw[0] === 'permission-denied' && vw[1] === 'permission-denied', 'view-as is read-only and bound by the same rules');
+await a.click('[data-act=exitView]');
+ok(await until(a, () => !/Viewing as/.test(document.body.innerText) && /Qasim Imtiaz/.test(document.body.innerText) || (document.querySelector('[data-act=tab][data-v=service]')?.click(), false), null, 15000), 'stop viewing: back to the full developer view');
+// view as a client: placeholder page, nothing from the database
+await a.click('[data-act=menu]'); await a.click('[data-act=people]');
+await a.click('.prow:has-text("Abdullah") [data-pp]'); await a.click('#mp-view');
+ok(await until(a, () => /Viewing as Abdullah/.test(document.body.innerText) && /being prepared/.test(document.body.innerText), null, 15000), 'client view: placeholder page');
+const cv = await a.evaluate(async (i) => [await window.__t.get('flights/' + i.fid), await window.__t.list('items'), await window.__t.get('groupsPrivate/' + i.groups[0])], ids);
+ok(cv.every((r) => r === 'permission-denied'), 'a client login can read nothing from the database');
+await a.click('[data-act=exitView]');
+
+/* ---------- 8. offline (owner): nothing is lost ---------- */
+await o.click('[data-act=tab][data-v=photos]'); await o.click('[data-act=show][data-v=all]');
+await O.setOffline(true); await o.evaluate(() => window.dispatchEvent(new Event('offline')));
+ok(await until(o, () => /Offline/.test(document.querySelector('#hdr').innerText)), 'pill shows Offline');
+await o.setInputFiles('input[data-up][multiple]', [5, 6].map((n) => `${IMG}/p${n}.jpg`));
+ok(await until(o, () => [...document.querySelectorAll('.card .num')].some((x) => x.textContent.startsWith('#~'))), 'offline items get temporary numbers');
+await o.click('[data-act=tab][data-v=groups]'); await o.click('[data-act=newGroupSel]');
+await o.fill('#gs-raw', 'Ali Khan 0300 1234567 House 12 Street 4 Lahore TCS'); await o.click('#gs-read'); await wait(300); await o.click('#gs-save');
+ok(await until(o, () => /Ali Khan/.test(document.body.innerText) || (document.querySelector('[data-act=gf][data-v=all]')?.click(), false)), 'parcel made offline');
+await o.reload();
+ok(await until(o, () => /Ali Khan/.test(document.body.innerText), null, 20000), 'after an offline reload the offline parcel is still there');
+await o.screenshot({ path: `${shots}/o-offline.png` });
+await O.setOffline(false); await o.evaluate(() => window.dispatchEvent(new Event('online')));
+ok(await until(o, () => /Online/.test(document.querySelector('#hdr').innerText), null, 40000), 'back online: synced');
+ok(await until(o, () => { const p = [...document.querySelectorAll('.gcard .pno')].map((x) => x.textContent); return p.length === 3 && !p.some((t) => t.includes('~')) && new Set(p).size === 3; }, null, 25000), 'offline parcel got a real, unique number');
+await b.click('[data-act=tab][data-v=photos]'); await b.click('[data-act=show][data-v=all]');
+ok(await until(b, () => document.querySelectorAll('.card').length === 6, null, 25000), 'offline photos reach the dispatcher');
+const nums = await b.evaluate(() => [...document.querySelectorAll('.card .num')].map((x) => x.textContent));
+ok(new Set(nums).size === 6 && !nums.some((n) => n.includes('~')), 'no duplicate item numbers: ' + nums.join(' '));
+// dispatcher adds a photo himself
+await b.setInputFiles('input[data-up][multiple]', [`${IMG}/p7.jpg`]);
+ok(await until(o, () => (document.querySelector('[data-act=tab][data-v=photos]')?.click(), document.querySelector('[data-act=show][data-v=all]')?.click(), document.querySelectorAll('.card').length === 7), null, 25000), 'a photo added by the dispatcher reaches the owner');
+
+/* ---------- 9. counter + back gesture ---------- */
+await b.click('[data-act=tab][data-v=service]'); await b.click('[data-act=counter]');
 ok(await until(b, () => /^P\d+$/.test(document.querySelector('.counter .c-pno')?.textContent || '')), 'counter opens with big parcel number');
 await b.goBack();
-ok(await until(b, () => !document.querySelector('.counter')), 'back closes the counter (B11)');
-ok(await b.evaluate(() => location.href.startsWith('http://localhost:8788')), 'still in the app after back');
+ok(await until(b, () => !document.querySelector('.counter')) && (await b.evaluate(() => location.href.startsWith('http://localhost:8788'))), 'back closes the counter and stays in the app');
 
-await a.screenshot({ path: `${shots}/a-desktop.png`, fullPage: false });
-await b.screenshot({ path: `${shots}/b-mobile.png`, fullPage: false });
-console.log(errs.length ? 'Page errors:\n' + errs.join('\n') : 'No page errors');
+/* ---------- 10. turning a person off ---------- */
+await a.click('[data-act=menu]'); await a.click('[data-act=people]');
+await a.click('.prow:has-text("Bilal") [data-pp]'); await a.click('#mp-off'); await a.click('[data-ch="1"]');
+ok(await until(a, () => /Bilal is turned off/.test(document.querySelector('#toasts').innerText)), 'Bilal turned off');
+const [Y, y] = await open(375, 760, true);
+await y.goto(URL + '#k=' + d1.key);
+ok(await until(y, () => /turned off/.test(document.body.innerText)), 'a turned-off link cannot log in');
+await y.goto(URL + '#k=ThisKeyDoesNotExist12345');
+ok(await until(y, () => /not valid/.test(document.body.innerText)), 'an unknown link is refused');
+// lockout
+await y.goto(URL + '#k=' + cl.key); await y.waitForSelector('#pin-in');
+for (let k = 0; k < 5; k++) { await y.fill('#pin-in', '11111' + k); await y.click('[data-act=login]'); await wait(350); }
+ok(await until(y, () => /Locked for 10 minutes|Too many wrong codes/.test(document.querySelector('#login-err')?.textContent || '')), '5 wrong codes lock the link for 10 minutes');
+await y.fill('#pin-in', cl.pin); await y.click('[data-act=login]');
+ok(await until(y, () => /Too many wrong codes/.test(document.querySelector('#login-err')?.textContent || '')), 'even the right code is refused while locked');
+
+await o.screenshot({ path: `${shots}/o-desktop.png` });
+await b.screenshot({ path: `${shots}/b-mobile.png` });
+console.log(errs.length ? 'Page errors:\n' + [...new Set(errs)].join('\n') : 'No page errors');
+console.log('developer link looked like: ' + devLink.replace(/k=.*/, 'k=…'));
 await browser.close();
 console.log(fails ? `${fails} FAILED` : 'ALL PASSED');
 process.exit(fails ? 1 : 0);

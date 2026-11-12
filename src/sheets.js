@@ -5,8 +5,8 @@ import {
   itemsIn, active, qtyOf, gLabel, pLabel, piecesIn, numLabel, itemLabel, svcKey, svcSort, mainSvc, missing, trackUrl, waMessage, toast, sheet, closeSheet,
   closeAll, choose, ask, pushLayer, closeTop, schedule, upd, put, del, w, D, saveLater, flushAll, logEv, newGroup, saveBook, lookupBook,
   moveItems, combine, deleteItems, setDone, setStep, setFlight, nextTmp, getDoc, getDocs, collection, query, where, writeBatch,
-  increment, deleteField, db, STEPS, PERM_LABELS, DEFAULT_PERMS, PROFILE_COLORS, DEFAULT_WA, DEFAULT_TRACK, FREE_BYTES, setDoc,
-  commitUndos, auth, signOut, unsubscribeAll,
+  increment, deleteField, db, STEPS, DEFAULT_WA, DEFAULT_TRACK, FREE_BYTES, setDoc, updateDoc, C, safeImg,
+  commitUndos, auth, signOut, unsubscribeAll, ROLE_LABEL, PRIVATE_FIELDS, isDispatcher, setFlightDispatchers, enterViewAs, SPACE,
 } from './core.js';
 import { FIELDS, SERVICES, CITIES, phoneKey, isMobile, waNumber, findPhones, localParse, fixUp } from './parse.js';
 import { fullPhoto, cachePhoto, compressOne, handleFiles } from './images.js';
@@ -44,6 +44,7 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
  ${eg ? `<label class="fld"><span>Paste one person's message as it is (one parcel)</span><textarea id="gs-raw" style="min-height:110px" placeholder="Ali Khan&#10;0300 1234567&#10;House 12, Street 4, Ali Town, Lahore&#10;TCS">${esc(d.raw || '')}</textarea></label>
  <div class="row" style="margin-bottom:8px"><button class="btn dark" id="gs-read">Fill in from the message</button>${aiAllowed() ? '<button class="btn" id="gs-shot">Read a screenshot</button>' : ''}<span class="status" id="gs-st"></span></div>
  <div id="gs-diff"></div>` : ''}
+ ${g?.locked ? '<div class="note"><span>The receiver\'s name, phone and address appear here when the owner releases them.</span></div>' : ''}
  <div class="two"><label class="fld"><span>Name</span><input id="gs-name" value="${esc(d.name)}" ${ro}></label><label class="fld"><span>Phone</span><input id="gs-phone" type="tel" inputmode="tel" value="${esc(d.phone)}" ${ro}></label></div>
  <div id="gs-dup"></div>
  <label class="fld"><span>Address</span><textarea id="gs-address" style="min-height:64px" ${ro}>${esc(d.address)}</textarea></label>
@@ -69,10 +70,10 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
     if (g && !cur) { sh.querySelector('.sh-b').innerHTML = '<p class="dim">This group was deleted.</p>'; LIVE.delete(live); return; }
     if (F('items')) {
       const its = itemsIn(g.id);
-      morph(F('items'), its.length ? its.map((i) => `<div class="row irow"><img src="${i.photos?.[0]?.t || ''}" alt=""><span class="grow">${numLabel(i)} ${esc(itemLabel(i))}</span>${eg ? `<button class="btn sm" data-out="${i.id}">Take out</button>` : ''}</div>`).join('') : '<p class="dim">No items yet. Drag photos onto this group.</p>');
+      morph(F('items'), its.length ? its.map((i) => `<div class="row irow"><img src="${safeImg(i.photos?.[0]?.t || '')}" alt=""><span class="grow">${numLabel(i)} ${esc(itemLabel(i))}</span>${eg ? `<button class="btn sm" data-out="${i.id}">Take out</button>` : ''}</div>`).join('') : '<p class="dim">No items yet. Drag photos onto this group.</p>');
     }
     if (F('steps')) morph(F('steps'), STEPS.map(([k, l]) => { const s = cur.steps?.[k]; return `<button class="step ${s ? 'on' : ''}" data-step="${k}">${l}${s ? `<small>${esc(fmtTime(s.at))}<br>${esc(profNameOf(s.by))}</small>` : ''}</button>`; }).join(''));
-    if (F('receipt')) morph(F('receipt'), cur.receipt ? `<img class="rthumb" src="${cur.receipt.t}" alt="Booking slip" data-rview="${cur.receipt.p}"><button class="btn sm" data-rnew>Replace</button><button class="btn sm danger" data-rdel>Remove</button>` : '<button class="btn sm" data-rnew>Add photo of booking slip</button>');
+    if (F('receipt')) morph(F('receipt'), cur.receipt ? `<img class="rthumb" src="${safeImg(cur.receipt.t)}" alt="Booking slip" data-rview="${esc(cur.receipt.p)}"><button class="btn sm" data-rnew>Replace</button><button class="btn sm danger" data-rdel>Remove</button>` : '<button class="btn sm" data-rnew>Add photo of booking slip</button>');
   };
   LIVE.add(live); live();
   sh.addEventListener('click', async (ev) => {
@@ -215,7 +216,7 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
   if (!g && eg && !prefill) setTimeout(() => F('raw')?.focus(), 120);
   return sh;
 }
-const profNameOf = (uid) => S.profiles.find((p) => p.id === uid)?.name || '';
+const profNameOf = (uid) => S.people.find((p) => p.id === uid)?.name || (uid === S.me?.uid ? S.me.name : '');
 
 // AI re-check for groups saved offline ("AI check pending").
 export async function aiCheck(gid) {
@@ -251,9 +252,9 @@ export function openViewer(id, order) {
     sh.querySelector('.sh-h h2').textContent = 'Item ' + numLabel(it);
     const ph = it.photos || []; if (st.ph >= ph.length) st.ph = 0; const cur = ph[st.ph]; const idx = st.order.indexOf(it.id);
     const archived = curFlight()?.archived;
-    const html = `<div class="vimg" id="vw-box"><img id="vw-img" src="${(cur && st.loaded?.[0] === cur.p && st.loaded[1]) || cur?.t || ''}" alt="Item ${numLabel(it)}" draggable="false"></div>
+    const html = `<div class="vimg" id="vw-box"><img id="vw-img" src="${safeImg((cur && st.loaded?.[0] === cur.p && st.loaded[1]) || cur?.t || '')}" alt="Item ${numLabel(it)}" draggable="false"></div>
  ${archived ? '<p class="dim" style="font-size:13px">Flight archived: only the small photo is kept.</p>' : ''}
- ${ph.length > 1 ? `<div class="vstrip">${ph.map((p, k) => `<img src="${p.t}" alt="Photo ${k + 1}" data-k="${k}" class="${k === st.ph ? 'on' : ''}">`).join('')}</div>` : ''}
+ ${ph.length > 1 ? `<div class="vstrip">${ph.map((p, k) => `<img src="${safeImg(p.t)}" alt="Photo ${k + 1}" data-k="${k}" class="${k === st.ph ? 'on' : ''}">`).join('')}</div>` : ''}
  <div class="vnav"><button class="btn sm" data-nav="-1" ${idx <= 0 ? 'disabled' : ''}>Previous</button><b>${idx + 1} of ${st.order.length}</b><button class="btn sm" data-nav="1" ${idx < 0 || idx >= st.order.length - 1 ? 'disabled' : ''}>Next</button></div>
  ${can('name') ? `<div class="row" style="flex-wrap:nowrap;margin-bottom:10px"><input id="vw-name" class="grow" value="${esc(it.name || '')}" placeholder="Name, e.g. small grey sneakers"><input id="vw-qty" style="width:80px" inputmode="numeric" value="${esc(it.qty ?? '')}" placeholder="Qty"></div>` : `<p style="font-weight:700;font-size:18px">${esc(itemLabel(it))}</p>`}
  <div class="fld"><span class="lab">Group</span><div class="gpick">${can('group') ? `<button data-vg="" class="${!groupById(it.groupId) ? 'on' : ''}">Not in a group</button>${S.groups.filter((g) => !g.done || g.id === it.groupId).map((g) => `<button data-vg="${g.id}" class="${it.groupId === g.id ? 'on' : ''}" style="--g:${gColor(g)}"><i></i>${esc(gLabel(g))}</button>`).join('')}<button data-vg="__new">+ New group</button>` : esc(gLabel(groupById(it.groupId)) || 'Not in a group')}</div></div>
@@ -274,7 +275,7 @@ export function openViewer(id, order) {
     else if (t.id === 'vw-split') {
       const rest = ph.filter((_, k) => k !== st.ph);
       upd('items/' + it.id, { photos: rest });
-      put('items/' + rid(), { fid: it.fid, n: null, tmp: nextTmp(), name: '', qty: null, photos: [cur], groupId: '', at: now(), by: S.me.uid });
+      put('items/' + rid(), { fid: it.fid, dids: it.dids || [], n: null, tmp: nextTmp(), name: '', qty: null, photos: [cur], groupId: '', at: now(), by: S.me.uid });
       logEv(`split a photo out of ${numLabel(it)}`); toast('Made into a new item'); st.ph = 0;
     } else if (t.id === 'vw-delp') {
       if (ph.length > 1) {
@@ -341,13 +342,13 @@ export function openCounter(id) {
     const its = itemsIn(id); const packed = g.packed || {}; const nPacked = its.filter((i) => packed[i.id]).length;
     const tu = trackUrl(g);
     morph(d, `<div class="c-top"><span class="c-pno">${esc(pLabel(g))}</span><span class="c-meth">${esc(g.service || 'Parcel')}</span><button class="c-x" data-cx>Close</button></div>
- <div class="c-lab">Receiver</div><div class="c-name">${esc(g.name || 'No name given')}</div>
+ <div class="c-lab">Receiver</div><div class="c-name">${esc(g.locked ? 'Not released yet' : g.name || 'No name given')}</div>
  <div class="c-lab">Phone, tap to copy</div><button class="c-phone" data-copy="${esc(g.phone || '')}">${esc(fmtPhone(g.phone) || 'No phone')}</button>${g.phone2 ? `<div class="c-addr">Also ${esc(fmtPhone(g.phone2))}</div>` : ''}
  <div class="row c-acts">${telLinks(g, true)}</div>
  <div class="c-lab">Address</div><div class="c-addr">${esc(g.address || 'No address given')}</div>${g.city ? `<div class="c-city">${esc(g.city)}</div>` : ''}
  <div class="c-grid"><div>Pieces<b>${piecesIn(id)}</b></div><div>Sender<b>${esc(fmtPhone(S.cfg.sender || '') || '–')}</b></div>${g.tracking ? `<div>Tracking<b>${esc(g.tracking)}</b>${tu ? `<a href="${esc(tu)}" target="_blank" rel="noopener">Track</a>` : ''}</div>` : ''}${g.weight ? `<div>Weight<b>${esc(g.weight)} kg</b></div>` : ''}</div>
  ${can('send') ? `<div class="c-steps">${STEPS.map(([k, l]) => `<button class="step ${g.steps?.[k] ? 'on' : ''}" data-cstep="${k}">${l}</button>`).join('')}</div>` : ''}
- <div class="c-items"><h3>What goes in this parcel (${plural(its.length, 'item')})${its.length ? ` · packed ${nPacked} of ${its.length}` : ''}</h3>${its.length ? `<div class="c-grid2">${its.map((i) => { const ph = i.photos || []; return `<div class="c-it ${packed[i.id] ? 'packed' : ''}" data-key="c-${i.id}"><img class="main" data-full="${esc(ph[0]?.p || '')}" src="${fulls.get(ph[0]?.p) || ph[0]?.t || ''}" alt="Item ${numLabel(i)}"><div class="c-cap"><b>${numLabel(i)}</b>${esc(i.name || 'No name')}${Number(i.qty) > 1 ? ` ×${esc(i.qty)}` : ''}</div>${ph.length > 1 ? `<div class="c-more">${ph.slice(1).map((x) => `<img src="${x.t}" alt="">`).join('')}</div>` : ''}${can('send') ? `<button class="pack" data-pack="${i.id}">${packed[i.id] ? '✓ Packed' : 'Tick when packed'}</button>` : ''}</div>`; }).join('')}</div>` : '<p style="font-size:20px">No items in this group yet.</p>'}</div>`);
+ <div class="c-items"><h3>What goes in this parcel (${plural(its.length, 'item')})${its.length ? ` · packed ${nPacked} of ${its.length}` : ''}</h3>${its.length ? `<div class="c-grid2">${its.map((i) => { const ph = i.photos || []; return `<div class="c-it ${packed[i.id] ? 'packed' : ''}" data-key="c-${i.id}"><img class="main" data-full="${esc(ph[0]?.p || '')}" src="${safeImg(fulls.get(ph[0]?.p) || ph[0]?.t || '')}" alt="Item ${numLabel(i)}"><div class="c-cap"><b>${numLabel(i)}</b>${esc(i.name || 'No name')}${Number(i.qty) > 1 ? ` ×${esc(i.qty)}` : ''}</div>${ph.length > 1 ? `<div class="c-more">${ph.slice(1).map((x) => `<img src="${safeImg(x.t)}" alt="">`).join('')}</div>` : ''}${can('send') ? `<button class="pack" data-pack="${i.id}">${packed[i.id] ? '✓ Packed' : 'Tick when packed'}</button>` : ''}</div>`; }).join('')}</div>` : '<p style="font-size:20px">No items in this group yet.</p>'}</div>`);
   };
   // Full photos: morph would reset src to the thumb, so keep a map and re-apply.
   const origDraw = draw;
@@ -433,7 +434,7 @@ export async function aiName(ids) {
   t.remove();
   const sug = out.filter((x) => x && x.id && x.name && its.some((i) => i.id === x.id));
   if (!sug.length) { toast('AI gave no names.'); return; }
-  const sh = sheet('Names from AI', `<p class="dim">Edit or untick any name, then save.</p>${sug.map((x) => { const i = its.find((y) => y.id === x.id); return `<div class="row irow"><input type="checkbox" checked data-ok="${i.id}" style="width:24px;min-height:24px"><img src="${i.photos?.[0]?.t || ''}" alt=""><b>${numLabel(i)}</b><input class="grow" data-nm="${i.id}" value="${esc(x.name)}"><span class="dim" style="font-size:13px">${esc(i.name || '')}</span></div>`; }).join('')}<button class="btn primary wide" id="an-save" style="margin-top:10px">Save names</button>`);
+  const sh = sheet('Names from AI', `<p class="dim">Edit or untick any name, then save.</p>${sug.map((x) => { const i = its.find((y) => y.id === x.id); return `<div class="row irow"><input type="checkbox" checked data-ok="${i.id}" style="width:24px;min-height:24px"><img src="${safeImg(i.photos?.[0]?.t || '')}" alt=""><b>${numLabel(i)}</b><input class="grow" data-nm="${i.id}" value="${esc(x.name)}"><span class="dim" style="font-size:13px">${esc(i.name || '')}</span></div>`; }).join('')}<button class="btn primary wide" id="an-save" style="margin-top:10px">Save names</button>`);
   sh.querySelector('#an-save').onclick = () => {
     let n = 0;
     sh.querySelectorAll('[data-nm]').forEach((inp) => { if (sh.querySelector(`[data-ok="${inp.dataset.nm}"]`).checked && inp.value.trim()) { upd('items/' + inp.dataset.nm, { name: inp.value.trim() }); n++; } });
@@ -446,20 +447,41 @@ export function openFlights() {
   const used = S.flights.reduce((s, f) => s + (f.bytes || 0), 0); const pct = Math.min(100, Math.round((used / FREE_BYTES) * 100));
   const body = `${can('flights') ? `<div class="box"><div class="two"><label class="fld"><span>Flight</span><input id="nf-label" placeholder="PK 853"></label><label class="fld"><span>Date</span><input id="nf-date" type="date" value="${todayISO()}"></label></div><button class="btn primary wide" data-act="createFlight">Add flight</button></div>` : ''}
  <div class="meter"><div class="row"><span class="grow"><b>Storage</b> ${fmtBytes(used)} of ${fmtBytes(FREE_BYTES)} free</span><span class="dim">${pct}%</span></div><div class="progress"><i style="width:${pct}%;${pct > 80 ? 'background:var(--stop)' : ''}"></i></div><div class="dim" style="font-size:13px">Archive or delete old flights to free space. Archiving keeps names, groups and small photos.</div></div>
- ${S.flights.map((f) => `<div class="gcard" style="--g:${f.id === S.fid ? 'var(--sign)' : 'var(--line)'}"><div class="gc-top"><span class="gc-name">${esc(f.label || 'Flight')}</span>${f.archived ? '<span class="svc alt">Archived</span>' : ''}${f.deleting ? '<span class="svc none">Deleting</span>' : ''}<span class="dim">${esc(fmtDate(f.date))}</span></div><div class="dim" style="font-size:13px">${fmtBytes(f.bytes || 0)}</div><div class="row" style="margin-top:8px">${f.id === S.fid ? '<span class="status grow">Open now</span>' : `<button class="btn sm primary grow" data-act="openFlight" data-id="${f.id}">Open</button>`}<button class="btn sm" data-act="activity" data-id="${f.id}">Activity</button>${can('export') ? `<button class="btn sm" data-act="mdFlight" data-id="${f.id}">Summary</button><button class="btn sm" data-act="csvFlight" data-id="${f.id}">Excel (CSV)</button>` : ''}${isAdmin() && !f.archived ? `<button class="btn sm" data-act="archiveFlight" data-id="${f.id}">Archive</button>` : ''}${isAdmin() ? `<button class="btn sm danger" data-act="delFlight" data-id="${f.id}">Delete</button>` : ''}</div></div>`).join('')}
+ ${S.flights.map((f) => `<div class="gcard" style="--g:${f.id === S.fid ? 'var(--sign)' : 'var(--line)'}"><div class="gc-top"><span class="gc-name">${esc(f.label || 'Flight')}</span>${f.archived ? '<span class="svc alt">Archived</span>' : ''}${f.deleting ? '<span class="svc none">Deleting</span>' : ''}<span class="dim">${esc(fmtDate(f.date))}</span></div><div class="dim" style="font-size:13px">${fmtBytes(f.bytes || 0)}</div>${dispatcherChips(f)}<div class="row" style="margin-top:8px">${f.id === S.fid ? '<span class="status grow">Open now</span>' : `<button class="btn sm primary grow" data-act="openFlight" data-id="${f.id}">Open</button>`}${isAdmin() ? `<button class="btn sm" data-act="activity" data-id="${f.id}">Activity</button>` : ''}${can('export') ? `<button class="btn sm" data-act="mdFlight" data-id="${f.id}">Summary</button><button class="btn sm" data-act="csvFlight" data-id="${f.id}">Excel (CSV)</button>` : ''}${isAdmin() && !f.archived ? `<button class="btn sm" data-act="archiveFlight" data-id="${f.id}">Archive</button>` : ''}${isAdmin() ? `<button class="btn sm danger" data-act="delFlight" data-id="${f.id}">Delete</button>` : ''}</div></div>`).join('')}
  ${isAdmin() ? '<div class="box" style="margin-top:14px"><b>Backup</b><p class="dim" style="font-size:14px">A full backup file of every flight, group, item and setting. Keep it somewhere safe.</p><div class="row"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="backupPhotos">Backup with full photos</button><button class="btn sm" data-act="restore">Restore from file</button></div></div>' : ''}`;
-  sheet('Flights', body);
+  const sh = sheet('Flights', body);
+  sh.addEventListener('click', async (ev) => {
+    const b = ev.target.closest('[data-disp]'); if (!b || b.disabled) return;
+    const f = S.flights.find((x) => x.id === b.dataset.fid); if (!f) return;
+    if (!navigator.onLine) { toast('Connect to the internet to change dispatchers.'); return; }
+    const cur = f.dids || []; const id = b.dataset.disp;
+    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+    sh.querySelectorAll(`[data-fid="${f.id}"]`).forEach((x) => (x.disabled = true));
+    try { await setFlightDispatchers(f.id, next); b.classList.toggle('on', next.includes(id)); toast(next.includes(id) ? `${b.textContent.trim()} can now see ${f.label}` : `${b.textContent.trim()} can no longer see ${f.label}`); }
+    catch (e) { toast('Could not change dispatchers: ' + (e.code || e.message)); }
+    sh.querySelectorAll(`[data-fid="${f.id}"]`).forEach((x) => (x.disabled = false));
+  });
+}
+// Owner: which dispatchers are on this flight. They see its items and parcels, never the
+// receiver details until those are released.
+function dispatcherChips(f) {
+  if (!isAdmin()) return '';
+  const ds = S.people.filter((p) => p.role === 'dispatcher' && !p.disabled);
+  if (!ds.length) return '<div class="dim" style="font-size:13px;margin-top:6px">No dispatchers yet. Add them in Menu, People.</div>';
+  return `<div class="fld" style="margin:8px 0 0"><span class="lab">Dispatchers on this flight</span><div class="chips">${ds.map((p) => `<button class="chip ${(f.dids || []).includes(p.id) ? 'on' : ''}" data-disp="${p.id}" data-fid="${f.id}">${esc(p.name)}</button>`).join('')}</div></div>`;
 }
 export function createFlight() {
   const label = $('#nf-label').value.trim(); if (!label) { toast('Enter the flight number or a name.'); return; }
-  const id = rid(); put('flights/' + id, { label, date: $('#nf-date').value, at: now(), by: S.me.uid, nextN: 1, bytes: 0 });
+  const id = rid(); put('flights/' + id, { dids: [], label, date: $('#nf-date').value, at: now(), by: S.me.uid, nextN: 1, bytes: 0 });
   logEv(`added flight ${label}`, id); closeAll(); setFlight(id);
 }
 async function loadFlight(fid) {
-  const [qi, qg] = await Promise.all([getDocs(query(collection(db, 'items'), where('fid', '==', fid))), getDocs(query(collection(db, 'groups'), where('fid', '==', fid)))]);
+  const get = (name) => getDocs(query(C(name), where('fid', '==', fid)));
+  const [qi, qg, qp] = await Promise.all([get('items'), get('groups'), get('groupsPrivate')]);
+  const priv = new Map(qp.docs.map((d) => [d.id, d.data()]));
   return {
     items: qi.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.n || 1e9) - (b.n || 1e9)),
-    groups: qg.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.at || 0) - (b.at || 0)),
+    groups: qg.docs.map((d) => { const o = { id: d.id, ...d.data() }; const p = priv.get(d.id) || {}; for (const k of PRIVATE_FIELDS) o[k] = p[k] ?? ''; return o; }).sort((a, b) => (a.at || 0) - (b.at || 0)),
   };
 }
 function buildMD(f, items, groups) {
@@ -500,7 +522,7 @@ export async function downloadCSV(fid) {
 export async function openActivity(fid) {
   const sh = sheet('Activity', '<div class="spin"></div>');
   try {
-    const q = await getDocs(query(collection(db, 'log'), where('fid', '==', fid)));
+    const q = await getDocs(query(C('log'), where('fid', '==', fid)));
     const L = q.docs.map((d) => d.data()).sort((a, b) => b.at - a.at).slice(0, 400);
     sh.querySelector('.sh-b').innerHTML = L.length ? `<ul class="log">${L.map((x) => `<li><span class="dim">${esc(fmtTime(x.at))}</span> ${esc(x.text)}</li>`).join('')}</ul>` : '<p class="dim">Nothing yet.</p>';
   } catch (e) { sh.querySelector('.sh-b').innerHTML = '<p class="dim">Could not load the activity.</p>'; }
@@ -508,7 +530,7 @@ export async function openActivity(fid) {
 // B14: chunked batches with progress; resumable because the flight is flagged first.
 async function wipe(col, fid, prog) {
   for (;;) {
-    const q = await getDocs(query(collection(db, col), where('fid', '==', fid)));
+    const q = await getDocs(query(C(col), where('fid', '==', fid)));
     if (!q.docs.length) return;
     for (let k = 0; k < q.docs.length; k += 400) {
       const b = writeBatch(db); q.docs.slice(k, k + 400).forEach((d) => b.delete(d.ref)); await b.commit();
@@ -528,7 +550,7 @@ export async function deleteFlight(fid, resume) {
   try {
     await setDoc(D('flights/' + fid), { deleting: true }, { merge: true });
     let n = 0;
-    for (const col of ['photos', 'receipts', 'log', 'items', 'groups']) await wipe(col, fid, (k) => { span.textContent = `Deleting ${col}… ${n + k}`; });
+    for (const col of ['photos', 'receipts', 'log', 'items', 'groupsPrivate', 'groups']) await wipe(col, fid, (k) => { span.textContent = `Deleting ${col}… ${n + k}`; });
     await del('flights/' + fid);
     if (S.fid === fid) setFlight(S.flights.find((x) => x.id !== fid)?.id || null);
     t.remove(); toast('Flight deleted');
@@ -547,20 +569,20 @@ export async function archiveFlight(fid) {
     logEv('archived the flight', fid); t.remove(); toast('Flight archived');
   } catch (e) { t.remove(); toast('Archiving stopped: ' + (e.code || e.message)); }
 }
-const BACKUP_COLS = ['profiles', 'config', 'flights', 'items', 'groups', 'log', 'book'];
+const BACKUP_COLS = ['people', 'config', 'flights', 'items', 'groups', 'groupsPrivate', 'log', 'book'];
 export async function backup(withPhotos) {
   if (!navigator.onLine) { toast('Connect to the internet to make a full backup.'); return; }
   const t = toast('Making the backup…', { ms: 600000 });
   try {
-    const out = { app: 'amanat', v: 1, at: now(), data: {} };
-    for (const c of [...BACKUP_COLS, ...(withPhotos ? ['photos', 'receipts'] : [])]) { const q = await getDocs(collection(db, c)); out.data[c] = q.docs.map((d) => ({ id: d.id, ...d.data() })); }
+    const out = { app: 'amanat', v: 2, at: now(), data: {} };
+    for (const c of [...BACKUP_COLS, ...(withPhotos ? ['photos', 'receipts'] : [])]) { const q = await getDocs(C(c)); out.data[c] = q.docs.map((d) => ({ id: d.id, ...d.data() })); }
     download(`Amanat backup ${todayISO()}.json`, JSON.stringify(out), 'application/json'); t.remove();
   } catch (e) { t.remove(); toast('Backup failed: ' + (e.code || e.message)); }
 }
 export async function restore() {
   const [f] = await pickFile('application/json,.json'); if (!f) return;
   let data; try { data = JSON.parse(await f.text()); } catch (e) { toast('That file is not an Amanat backup.'); return; }
-  if (data?.app !== 'amanat' || !data.data) { toast('That file is not an Amanat backup.'); return; }
+  if (data?.app !== 'amanat' || data.v !== 2 || !data.data) { toast('That file is not a backup from this version of Amanat.'); return; }
   const n = Object.values(data.data).reduce((s, a) => s + a.length, 0);
   if (!(await ask(`Restore ${n} records from ${fmtTime(data.at)}? Records with the same id are overwritten; nothing is deleted.`, 'Restore'))) return;
   const t = toast('Restoring…', { ms: 600000 }); const span = t.querySelector('span'); let k = 0;
@@ -579,7 +601,8 @@ export async function restore() {
 export function openMenu() {
   const c = S.cfg;
   const sh = sheet('Menu', `
-  <div class="box"><div class="row"><span class="grow"><b>${esc(S.me.name)}</b> <span class="dim">${S.me.role === 'admin' ? 'Admin' : 'Sorter'}</span></span><button class="btn sm" data-act="switchFace">Switch profile</button></div></div>
+  <div class="box"><div class="row"><span class="grow"><b>${esc(S.me.name)}</b> <span class="dim">${ROLE_LABEL[S.me.role]}</span></span><button class="btn sm" data-act="switchFace">Log out</button></div>
+   <div class="row" style="margin-top:8px"><button class="btn sm" id="mn-link">My private link</button><button class="btn sm" id="mn-code">Change my code</button>${isAdmin() ? '<button class="btn sm primary" data-act="people">People and links</button>' : ''}</div></div>
   <div class="box"><b>AI helper</b><p class="dim" style="font-size:14px">AI reads pasted addresses and screenshots and suggests item names. It uses Google Gemini's free tier, where Google may use what is sent to improve its products. The basic reader always works without AI.</p>
    <label class="tgl"><input type="checkbox" id="mn-ailocal" ${S.aiLocalOff ? '' : 'checked'}> Use AI on this device</label>
    ${isAdmin() ? `<label class="tgl"><input type="checkbox" id="mn-ai" ${c.aiOff ? '' : 'checked'}> AI on for everyone</label>` : ''}</div>
@@ -588,11 +611,13 @@ export function openMenu() {
    <label class="fld"><span>WhatsApp message to the receiver. Use {name} {service} {tracking} {pieces} {city} {sender}</span><textarea id="st-wa" style="min-height:70px">${esc(c.waTemplate || DEFAULT_WA)}</textarea></label>
    <div class="fld"><span class="lab">Tracking pages ({n} is the tracking number)</span>${['TCS', 'Leopards', 'Daewoo', 'Faisal Movers', 'Cargo'].map((s) => `<div class="row trk"><span>${s}</span><input class="grow" data-trk="${s}" value="${esc((c.trackUrls || {})[s] ?? DEFAULT_TRACK[s] ?? '')}" placeholder="https://…{n}"></div>`).join('')}</div>
    <button class="btn wide" id="st-save">Save settings</button></div>
-   <div class="box"><div class="row"><b class="grow">Profiles</b><button class="btn sm primary" data-act="addProfile">Add profile</button></div>${S.profiles.map((p) => `<div class="prow" style="--pc:${esc(p.color || '#4F6475')}"><i></i><span class="grow"><b>${esc(p.name)}</b> <span class="dim">${p.role === 'admin' ? 'Admin' : 'Sorter'}${p.disabled ? ', turned off' : ''}</span></span><button class="btn sm" data-act="editProfile" data-id="${p.id}">Edit</button></div>`).join('')}</div>` : ''}
+` : ''}
   <div class="box"><b>This device</b><p class="dim" style="font-size:14px" id="mn-dev">Checking storage…</p><label class="tgl"><input type="checkbox" id="mn-theme" ${document.documentElement.dataset.theme === 'dark' ? 'checked' : ''}> Dark mode</label></div>`);
   navigator.storage?.persisted?.().then((p) => navigator.storage.estimate?.().then((e) => { const el = sh.querySelector('#mn-dev'); if (el) el.textContent = `${p ? 'Data is kept safe on this device.' : 'Install Amanat to the Home Screen so the browser keeps its data.'} Using ${fmtBytes(e?.usage)} here.`; })).catch(() => {});
   sh.querySelector('#mn-ailocal').onchange = (e) => { S.aiLocalOff = !e.target.checked; try { localStorage.setItem('amanat3.aiOff', S.aiLocalOff ? '1' : '0'); } catch (x) { /* ignore */ } schedule(); };
   sh.querySelector('#mn-theme').onchange = (e) => { const v = e.target.checked ? 'dark' : 'light'; document.documentElement.dataset.theme = v; try { localStorage.setItem('amanat3.theme', v); } catch (x) { /* ignore */ } };
+  sh.querySelector('#mn-link').onclick = () => showMyLink(S.key || S.people.find((p) => p.id === S.me.uid)?.key || '');
+  sh.querySelector('#mn-code').onclick = () => changeMyCode();
   const ai = sh.querySelector('#mn-ai'); if (ai) ai.onchange = async (e) => {
     const off = !e.target.checked; w(setDoc(D('config/main'), { aiOff: off }, { merge: true }));
     try { await api('settings', { aiOff: off }); } catch (x) { toast('Saved here; the server switch needs internet: ' + x.message); }
@@ -603,48 +628,112 @@ export function openMenu() {
     toast('Settings saved');
   };
 }
-export function openProfile(id) {
-  const p = id ? S.profiles.find((x) => x.id === id) : null;
-  const role = p?.role || 'sorter'; const perms = { ...DEFAULT_PERMS[role], ...(p?.perms || {}) };
-  const self = p?.id === S.me.uid;
-  const sh = sheet(p ? 'Edit ' + p.name : 'Add profile', `
-  <div class="two"><label class="fld"><span>Name</span><input id="pf-name" value="${esc(p?.name || '')}"></label><label class="fld"><span>Role</span><select id="pf-role" ${self ? 'disabled' : ''}><option value="sorter" ${role === 'sorter' ? 'selected' : ''}>Sorter</option><option value="admin" ${role === 'admin' ? 'selected' : ''}>Admin (everything)</option></select></label></div>
-  <label class="fld"><span>What they do (shown on the login card)</span><input id="pf-job" value="${esc(p?.job || '')}" placeholder="Groups the photos and adds addresses"></label>
-  <div class="fld"><span class="lab">Colour</span><div class="chips">${PROFILE_COLORS.map((c) => `<button class="chip sw ${(p?.color || PROFILE_COLORS[0]) === c ? 'on' : ''}" data-col="${c}" style="--pc:${c}" aria-label="Colour ${c}"></button>`).join('')}</div></div>
-  <div class="fld" id="pf-perms"><span class="lab">Allowed to</span>${Object.entries(PERM_LABELS).map(([k, l]) => `<label class="tgl"><input type="checkbox" data-perm="${k}" ${perms[k] ? 'checked' : ''}> ${l}</label>`).join('')}<p class="dim" style="font-size:13px">Deleting photos, items and flights is for admins only.</p></div>
-  <label class="fld"><span>${p ? 'New code (leave empty to keep the current one)' : 'Code (at least 4 characters)'}</span><input id="pf-code" type="password" autocomplete="new-password"></label>
-  ${p && !self ? `<label class="tgl"><input type="checkbox" id="pf-off" ${p.disabled ? 'checked' : ''}> Turn this profile off (signs it out everywhere)</label>` : ''}
-  <div class="status err" id="pf-err"></div>
-  <button class="btn primary wide" id="pf-save">${p ? 'Save' : 'Add profile'}</button>`);
-  let color = p?.color || PROFILE_COLORS[S.profiles.length % PROFILE_COLORS.length];
-  sh.querySelectorAll('[data-col]').forEach((b) => (b.onclick = () => { color = b.dataset.col; sh.querySelectorAll('[data-col]').forEach((x) => x.classList.toggle('on', x === b)); }));
-  const permBox = sh.querySelector('#pf-perms');
-  const roleSel = sh.querySelector('#pf-role');
-  const syncRole = () => { permBox.style.display = roleSel.value === 'admin' ? 'none' : ''; }; roleSel.onchange = syncRole; syncRole();
-  sh.querySelector('#pf-save').onclick = async () => {
-    const err = sh.querySelector('#pf-err'); err.textContent = '';
-    const name = sh.querySelector('#pf-name').value.trim(); const code = sh.querySelector('#pf-code').value;
-    if (!name) { err.textContent = 'Enter a name.'; return; }
-    if (!p && code.length < 4) { err.textContent = 'Choose a code of at least 4 characters.'; return; }
-    if (code && code.length < 4) { err.textContent = 'The code must be at least 4 characters.'; return; }
-    if (!navigator.onLine) { err.textContent = 'Changing profiles needs internet.'; return; }
-    const r = self ? 'admin' : roleSel.value;
-    const pm = {}; sh.querySelectorAll('[data-perm]').forEach((i) => (pm[i.dataset.perm] = i.checked));
-    const disabled = !!sh.querySelector('#pf-off')?.checked;
-    const pid = p?.id || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) + '-' + rid().slice(-4);
-    const btn = sh.querySelector('#pf-save'); btn.disabled = true; btn.textContent = 'Saving…';
-    try {
-      const res = await api('profile-code', { profileId: pid, role: r, perms: pm, disabled, name });
-      if (code) await api('profile-code', { profileId: pid, code });
-      w(setDoc(D('profiles/' + pid), { name, role: r, perms: r === 'admin' ? DEFAULT_PERMS.admin : pm, color, job: sh.querySelector('#pf-job').value.trim(), disabled, ...(p ? {} : { at: now() }) }, { merge: true }));
-      closeSheet(); toast(p ? 'Profile saved' + (res.signedOut ? '. They need to log in again.' : '') : `Profile added. Give ${name} the code.`);
-      if (res.warning) toast(res.warning, { ms: 6000 });
-    } catch (e) { btn.disabled = false; btn.textContent = p ? 'Save' : 'Add profile'; err.textContent = e.message; }
+/* =================== people, private links, view as =================== */
+const linkOf = (key) => `${location.origin}/#k=${key}`;
+const inviteText = (p, key, pin) => `Amanat: private link for ${p.name}\n${linkOf(key)}\nCode: ${pin}\nOpen the link and type the code. Please do not share them.`;
+function copyBox(title, text, note, attrs = '') {
+  const sh = sheet(title, `<p>${esc(note)}</p><textarea id="cp-text" readonly style="min-height:130px" ${attrs}>${esc(text)}</textarea><button class="btn primary wide" id="cp-btn">Copy</button>`);
+  sh.querySelector('#cp-btn').onclick = () => copy(text, 'Copied. Paste it in WhatsApp.');
+  return sh;
+}
+export function showMyLink(key) {
+  if (!key) { toast('Your link is not saved on this device. Ask the owner for a new one.'); return; }
+  copyBox('Your private link', linkOf(key), 'This link opens Amanat as you. Keep it somewhere safe: you need it, with your code, to log in on another phone or laptop.');
+}
+function changeMyCode() {
+  const min = isAdmin() ? 6 : 4;
+  const sh = sheet('Change my code', `<label class="fld"><span>New code (at least ${min} characters)</span><input id="mc-1" type="password" autocomplete="new-password"></label><label class="fld"><span>Type it again</span><input id="mc-2" type="password" autocomplete="new-password"></label><div class="status err" id="mc-err"></div><button class="btn primary wide" id="mc-save">Save</button>`);
+  sh.querySelector('#mc-save').onclick = async () => {
+    const a = sh.querySelector('#mc-1').value, b = sh.querySelector('#mc-2').value, err = sh.querySelector('#mc-err');
+    if (a !== b) { err.textContent = 'The two codes are not the same.'; return; }
+    try { await api('people', { action: 'myCode', code: a }); closeSheet(); toast('Your code is changed'); } catch (e) { err.textContent = e.message; }
   };
+}
+const PEOPLE_ORDER = ['owner', 'dev', 'dispatcher', 'client', 'passenger'];
+export function openPeople() {
+  if (!isAdmin()) return;
+  const roles = S.me.role === 'dev' ? ['dispatcher', 'client', 'passenger', 'owner', 'dev'] : ['dispatcher', 'client', 'passenger'];
+  const sh = sheet('People and links', `
+  <div class="box"><b>Add a person</b>
+   <div class="two"><label class="fld"><span>Name</span><input id="pp-name" autocomplete="off"></label><label class="fld"><span>Role</span><select id="pp-role">${roles.map((r) => `<option value="${r}">${ROLE_LABEL[r]}</option>`).join('')}</select></label></div>
+   <div class="two"><label class="fld"><span>Phone (optional)</span><input id="pp-phone" type="tel" inputmode="tel"></label><label class="fld"><span>City (optional)</span><input id="pp-city"></label></div>
+   <div class="status err" id="pp-err"></div><button class="btn primary wide" id="pp-add">Add and make invite</button>
+   <p class="dim" style="font-size:13px;margin-bottom:0">Each person gets their own private link and code. Nobody sees a list of other people.</p></div>
+  <div id="pp-list"></div>`, { onClose: () => LIVE.delete(draw) });
+  const draw = () => {
+    const box = sh.querySelector('#pp-list'); if (!box) return;
+    morph(box, PEOPLE_ORDER.map((r) => { const ps = S.people.filter((p) => p.role === r); return ps.length ? `<h3 class="pp-h">${ROLE_LABEL[r]}s</h3>${ps.map((p) => `<div class="prow"><span class="grow"><b>${esc(p.name)}</b>${p.id === S.me.uid ? ' <span class="dim">(you)</span>' : ''}${p.disabled ? ' <span class="warn">turned off</span>' : ''}<br><span class="dim" style="font-size:13px">${esc([fmtPhone(p.phone), p.city].filter(Boolean).join(', '))}</span></span>${canManage(p) ? `<button class="btn sm" data-pp="${p.id}">Manage</button>` : ''}</div>`).join('')}` : ''; }).join(''));
+  };
+  LIVE.add(draw); draw();
+  sh.addEventListener('click', (ev) => { const b = ev.target.closest('[data-pp]'); if (b) managePerson(b.dataset.pp); });
+  sh.querySelector('#pp-add').onclick = async () => {
+    const err = sh.querySelector('#pp-err'); err.textContent = '';
+    const name = sh.querySelector('#pp-name').value.trim(), role = sh.querySelector('#pp-role').value;
+    if (!name) { err.textContent = 'Enter a name.'; return; }
+    if (!navigator.onLine) { err.textContent = 'Adding people needs internet.'; return; }
+    const btn = sh.querySelector('#pp-add'); btn.disabled = true;
+    try {
+      const r = await api('people', { action: 'create', name, role });
+      const p = { name, role, key: r.key, phone: sh.querySelector('#pp-phone').value.trim(), city: sh.querySelector('#pp-city').value.trim(), note: '', disabled: false, at: now() };
+      w(setDoc(D('people/' + r.pid), p), 'person');
+      ['name', 'phone', 'city'].forEach((k) => (sh.querySelector('#pp-' + k).value = ''));
+      showInvite({ id: r.pid, ...p }, r.key, r.pin);
+    } catch (e) { err.textContent = e.message; }
+    btn.disabled = false;
+  };
+}
+const canManage = (p) => S.me.role === 'dev' || (p.role !== 'dev' && p.role !== 'owner');
+function showInvite(p, key, pin) {
+  copyBox('Invite for ' + p.name, inviteText(p, key, pin), 'Send this to ' + p.name + '. The code is shown only now; you can always make a new one.', `data-key="${esc(key)}" data-pin="${esc(pin)}"`);
+}
+function managePerson(id) {
+  const p = S.people.find((x) => x.id === id); if (!p || !canManage(p)) return;
+  const self = p.id === S.me.uid;
+  const viewable = ['dispatcher', 'client', 'passenger'].includes(p.role);
+  const sh = sheet(p.name, `
+  <div class="two"><label class="fld"><span>Name</span><input id="mp-name" value="${esc(p.name)}"></label><label class="fld"><span>Role</span><input value="${ROLE_LABEL[p.role]}" readonly></label></div>
+  <div class="two"><label class="fld"><span>Phone</span><input id="mp-phone" type="tel" value="${esc(p.phone || '')}"></label><label class="fld"><span>City</span><input id="mp-city" value="${esc(p.city || '')}"></label></div>
+  <button class="btn wide" id="mp-save">Save details</button>
+  <div class="box" style="margin-top:12px"><b>Link and code</b>
+   <div class="row" style="margin-top:8px"><button class="btn sm primary" id="mp-invite">New code and invite</button><button class="btn sm" id="mp-copy">Copy link only</button><button class="btn sm" id="mp-relink">New link</button></div>
+   <p class="dim" style="font-size:13px;margin-bottom:0">A new code or link makes the old one stop working.</p></div>
+  <div class="row">${viewable ? '<button class="btn" id="mp-view">View as ' + esc(p.name) + '</button>' : ''}${self ? '' : `<button class="btn ${p.disabled ? '' : 'danger'}" id="mp-off">${p.disabled ? 'Turn back on' : 'Turn off'}</button>`}</div>
+  <div class="status err" id="mp-err"></div>`);
+  const err = sh.querySelector('#mp-err');
+  const run = async (fn) => { err.textContent = ''; if (!navigator.onLine) { err.textContent = 'This needs internet.'; return; } try { await fn(); } catch (e) { err.textContent = e.message; } };
+  const Q = (x) => sh.querySelector(x);
+  Q('#mp-save').onclick = () => run(async () => {
+    const name = Q('#mp-name').value.trim() || p.name;
+    if (name !== p.name) await api('people', { action: 'update', pid: id, name });
+    w(updateDoc(D('people/' + id), { name, phone: Q('#mp-phone').value.trim(), city: Q('#mp-city').value.trim() }), 'person');
+    closeSheet(); toast('Saved');
+  });
+  Q('#mp-invite').onclick = () => run(async () => {
+    if (!(await ask(`Make a new code for ${p.name}? The old code stops working.`, 'New code'))) return;
+    const r = await api('people', { action: 'pin', pid: id }); showInvite(p, p.key, r.pin);
+  });
+  Q('#mp-copy').onclick = () => copy(linkOf(p.key), 'Link copied');
+  Q('#mp-relink').onclick = () => run(async () => {
+    if (!(await ask(`Make a new link for ${p.name}? The old link stops working and they are signed out.`, 'New link'))) return;
+    const r = await api('people', { action: 'relink', pid: id, oldKey: p.key });
+    w(updateDoc(D('people/' + id), { key: r.key }), 'person'); p.key = r.key;
+    if (self) { S.key = r.key; try { localStorage.setItem('amanat4.key', r.key); } catch (e) { /* ignore */ } }
+    copy(linkOf(r.key), 'New link copied');
+  });
+  const off = Q('#mp-off'); if (off) off.onclick = () => run(async () => {
+    const disabled = !p.disabled;
+    if (disabled && !(await ask(`Turn off ${p.name}? They are signed out and cannot log in.`, 'Turn off'))) return;
+    await api('people', { action: 'update', pid: id, disabled });
+    w(updateDoc(D('people/' + id), { disabled }), 'person'); closeSheet(); toast(disabled ? `${p.name} is turned off` : `${p.name} is back on`);
+  });
+  const view = Q('#mp-view'); if (view) view.onclick = () => run(async () => {
+    const r = await api('people', { action: 'viewAs', pid: id });
+    closeAll(); await enterViewAs(r.token, p);
+  });
 }
 export async function switchProfile() {
   flushAll(); commitUndos(); // B12
-  if (!navigator.onLine && !(await ask('You are offline. Logging in again needs internet. Switch anyway?', 'Switch'))) return;
+  if (!navigator.onLine && !(await ask('You are offline. Logging in again needs internet. Log out anyway?', 'Log out'))) return;
   closeAll(); S.sel.clear();
   unsubscribeAll();
   try { await signOut(auth); } catch (e) { /* ignore */ }

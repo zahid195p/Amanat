@@ -2,6 +2,7 @@
 import morphdom from 'morphdom';
 import {
   S, $, esc, plural, fmtDate, fmtPhone, fmtBytes, isAdmin, can, curFlight, groupById, gColor, gTitle, visItems, itemsIn, gLabel, pLabel,
+  safeImg, isDispatcher, isStaff, SPACE, ROLE_LABEL,
   ungrouped, active, sentGroups, toSend, qtyOf, piecesIn, numLabel, itemLabel, svcKey, svcSort, mainSvc, missing,
   trackUrl, STEPS, FREE_BYTES, layerCount,
 } from './core.js';
@@ -49,18 +50,24 @@ function syncPill() {
   return '<span class="pill ok" title="Everything is uploaded">Online</span>';
 }
 function hdr() {
-  if (!S.me) return '<div class="brand">Amanat</div>';
+  const brand = `<div class="brand">Amanat${SPACE === 'test' ? '<span class="testtag" title="Test site: nothing here touches the real data">TEST</span>' : ''}</div>`;
+  if (!S.me || !isStaff()) return brand + (S.me ? `<span></span><div class="hdr-r"><button class="face" data-act="${S.me.viewAs ? 'exitView' : 'switchFace'}">${S.me.viewAs ? 'Stop viewing' : 'Log out'}</button></div>` : '');
   const f = curFlight();
-  return `<div class="brand">Amanat</div><button class="tag" data-act="flights" aria-label="Choose flight"><span class="hole"></span><span class="tag-t">${f ? esc(f.label || 'Flight') : 'Add a flight'}</span>${f ? `<span class="tag-s">${esc(fmtDate(f.date))}</span>` : ''}</button><div class="hdr-r">${syncPill()}<button class="face" data-act="menu" aria-label="Menu and settings">${esc(S.me.name || 'Me')}</button></div>`;
+  return `${brand}<button class="tag" data-act="flights" aria-label="Choose flight"><span class="hole"></span><span class="tag-t">${f ? esc(f.label || 'Flight') : 'Add a flight'}</span>${f ? `<span class="tag-s">${esc(fmtDate(f.date))}</span>` : ''}</button><div class="hdr-r">${syncPill()}<button class="face" data-act="menu" aria-label="Menu and settings">${esc(S.me.name || 'Me')}</button></div>`;
 }
 
 function view() {
   if (S.fatal) return `<div class="empty narrow"><h2>Can't open Amanat</h2><p>${esc(S.fatal)}</p></div>`;
   if (!S.configured) return `<div class="empty narrow"><h2>Almost ready</h2><p>Amanat is not connected to its database yet. Add the Firebase web config to <code>src/firebase-config.js</code> and deploy again.</p></div>`;
   if (S.user === undefined) return '<div class="spin" aria-label="Loading"></div>';
-  if (!S.me) return S.profilesLoaded && !S.profiles.length ? vSetup() : vLogin();
+  if (!S.me) return !S.key && S.setup?.needed ? vSetup() : vLogin();
+  const banner = S.me.viewAs ? `<div class="note view" data-key="viewas"><span>Viewing as <b>${esc(S.me.name)}</b> (${ROLE_LABEL[S.me.role]}). This is exactly what they can see. Nothing can be changed.</span><button class="btn sm" data-act="exitView">Stop viewing</button></div>` : '';
+  if (!isStaff()) return banner + `<div class="empty narrow"><h2>Hello ${esc(S.me.name)}</h2><p>Your page is being prepared. You will see your ${S.me.role === 'passenger' ? 'flight' : 'parcels'} here soon.</p></div>`;
+  return banner + staffView();
+}
+function staffView() {
   if (!S.flightsLoaded) return '<div class="spin" aria-label="Loading"></div>';
-  if (!curFlight()) return `<div class="empty narrow"><h2>No flight yet</h2><p>Add the flight first. Photos and groups are kept per flight.</p>${can('flights') ? '<button class="btn primary" data-act="flights">Add a flight</button>' : '<p class="dim">Ask an admin to add the flight.</p>'}</div>`;
+  if (!curFlight()) return `<div class="empty narrow"><h2>No flight yet</h2>${can('flights') ? '<p>Add the flight first. Photos and groups are kept per flight.</p><button class="btn primary" data-act="flights">Add a flight</button>' : '<p>You are not on any flight right now. It appears here when the owner adds you to one.</p>'}</div>`;
   if (curFlight().deleting) return `<div class="empty narrow"><h2>This flight is being deleted</h2><p>${isAdmin() ? '<button class="btn danger" data-act="resumeDelete">Finish deleting</button>' : 'Pick another flight.'}</p><button class="btn" data-act="flights">Flights</button></div>`;
   let h = installHint();
   if (S.tab === 'groups') h += vGroups();
@@ -78,20 +85,29 @@ function installHint() {
 
 /* ---------- login & setup ---------- */
 function vLogin() {
-  if (!S.profilesLoaded) return '<div class="spin" aria-label="Loading"></div>';
-  const ps = S.profiles.filter((p) => !p.disabled);
-  return `<div class="faces"><h1 style="font-size:32px">Who is using Amanat?</h1>${ps.map((p) => `<div class="facecard ${S.loginPick === p.id ? 'on' : ''}" data-key="face-${p.id}" style="--pc:${esc(p.color || '#4F6475')}"><button class="faceb" data-act="pickFace" data-v="${p.id}"><b>${esc(p.name)}</b><span class="dim">${esc(p.job || (p.role === 'admin' ? 'Admin' : 'Sorter'))}</span></button>${S.loginPick === p.id ? `<form class="pin" data-act="noop" onsubmit="return false"><input id="pin-in" type="password" autocomplete="current-password" placeholder="Code" aria-label="Code for ${esc(p.name)}"><button class="btn primary" data-act="login" ${S.loggingIn ? 'disabled' : ''}>${S.loggingIn ? 'Opening…' : 'Open'}</button></form><div class="status err" id="login-err">${esc(S.loginErr || '')}</div>` : ''}</div>`).join('')}<p class="dim">You stay signed in on this device, even offline, until you switch profile. The first login needs internet.</p></div>`;
+  if (S.key && S.who) {
+    return `<div class="faces"><h1 style="font-size:32px">${S.who.name ? 'Hello ' + esc(S.who.name) : 'Welcome back'}</h1>
+    <form class="pin" onsubmit="return false"><input id="pin-in" type="password" inputmode="text" autocomplete="current-password" placeholder="Your code" aria-label="Your code"><button class="btn primary" data-act="login" ${S.loggingIn ? 'disabled' : ''}>${S.loggingIn ? 'Opening…' : 'Open'}</button></form>
+    <div class="status err" id="login-err">${esc(S.loginErr || '')}</div>
+    <p class="dim">You stay signed in on this device, even offline. Never share your link or code.</p>
+    <button class="btn sm" data-act="otherLink">Use a different link</button></div>`;
+  }
+  if (S.key && !S.loginErr) return '<div class="spin" aria-label="Loading"></div>';
+  return `<div class="faces"><h1 style="font-size:32px">Open your private link</h1><p>Amanat opens with the private link that was sent to you. If you have it, paste it here.</p>
+  <div class="pin"><input id="link-in" autocomplete="off" placeholder="Paste your link" aria-label="Your private link"><button class="btn primary" data-act="useLink">Continue</button></div>
+  <div class="status err" id="login-err">${esc(S.loginErr || '')}</div></div>`;
 }
 function vSetup() {
   const c = S.setup?.configured;
-  const missingCfg = c ? Object.entries({ kv: 'KV namespace binding AMANAT_KV', serviceAccount: 'secret FIREBASE_SERVICE_ACCOUNT', setupKey: 'secret SETUP_KEY' }).filter(([k]) => !c[k]).map(([, v]) => v) : [];
-  return `<div class="faces"><h1 style="font-size:32px">Set up Amanat</h1><p>This runs once. You become the admin and choose your own code. Nobody else can see the code.</p>
+  const missingCfg = c ? Object.entries({ kv: 'KV namespace binding AMANAT_KV', serviceAccount: 'secret FIREBASE_SERVICE_ACCOUNT' }).filter(([k]) => !c[k]).map(([, v]) => v) : [];
+  return `<div class="faces"><h1 style="font-size:32px">Set up Amanat</h1><p>This runs once and makes the developer login. You choose your own code; nobody else can see it.</p>
   ${missingCfg.length ? `<div class="note bad"><span>Cloudflare is still missing: ${esc(missingCfg.join(', '))}.</span></div>` : ''}
   <label class="fld"><span>Your name</span><input id="su-name" value="Zahid" autocomplete="name"></label>
-  <label class="fld"><span>Choose your code (at least 4 characters)</span><input id="su-code" type="password" autocomplete="new-password"></label>
+  <label class="fld"><span>Choose your code (at least 6 characters)</span><input id="su-code" type="password" autocomplete="new-password"></label>
   <label class="fld"><span>Type it again</span><input id="su-code2" type="password" autocomplete="new-password"></label>
   <label class="fld"><span>Setup phrase</span><input id="su-key" type="password" autocomplete="off"></label>
-  <button class="btn primary wide" data-act="setup" ${S.loggingIn ? 'disabled' : ''}>${S.loggingIn ? 'Setting up…' : 'Set up and open'}</button><div class="status err" id="login-err">${esc(S.loginErr || '')}</div></div>`;
+  <button class="btn primary wide" data-act="setup" ${S.loggingIn ? 'disabled' : ''}>${S.loggingIn ? 'Setting up…' : 'Set up and open'}</button><div class="status err" id="login-err">${esc(S.loginErr || '')}</div>
+  <p class="dim" style="margin-top:14px">Already have a private link? <button class="btn sm" data-act="haveLink">Paste it</button></p></div>`;
 }
 
 /* ---------- search ---------- */
@@ -110,7 +126,7 @@ function card(i) {
   const g = groupById(i.groupId); const sel = S.sel.has(i.id); const ph = i.photos || [];
   const edit = can('name');
   return `<div class="card ${sel ? 'sel' : ''}" data-key="it-${i.id}" data-iid="${i.id}">
- <div class="ph" data-tsel="${i.id}" role="button" tabindex="0" aria-pressed="${sel}" aria-label="Select item ${numLabel(i)}">${ph[0] ? `<img src="${ph[0].t}" alt="" draggable="false" loading="lazy" decoding="async">` : ''}<span class="num">${numLabel(i)}</span>${ph.length > 1 ? `<span class="stack">${ph.length} photos</span>` : ''}${g ? `<span class="gtag" style="--g:${gColor(g)}">${esc(gLabel(g))}</span>` : ''}<span class="ck">${sel ? '✓' : ''}</span>${i._pending ? `<span class="pend on-ph">${ICON.cloud}</span>` : ''}</div>
+ <div class="ph" data-tsel="${i.id}" role="button" tabindex="0" aria-pressed="${sel}" aria-label="Select item ${numLabel(i)}">${ph[0] ? `<img src="${safeImg(ph[0].t)}" alt="" draggable="false" loading="lazy" decoding="async">` : ''}<span class="num">${numLabel(i)}</span>${ph.length > 1 ? `<span class="stack">${ph.length} photos</span>` : ''}${g ? `<span class="gtag" style="--g:${gColor(g)}">${esc(gLabel(g))}</span>` : ''}<span class="ck">${sel ? '✓' : ''}</span>${i._pending ? `<span class="pend on-ph">${ICON.cloud}</span>` : ''}</div>
  <button class="zoom" data-act="view" data-id="${i.id}" aria-label="Open large">⤢</button>
  <div class="meta">${edit ? `<input class="nm" id="nm-${i.id}" data-name="${i.id}" value="${esc(i.name || '')}" placeholder="Name it, e.g. brown shoes" aria-label="Name"><input class="qt" id="qt-${i.id}" data-qty="${i.id}" inputmode="numeric" value="${esc(i.qty ?? '')}" placeholder="Qty" aria-label="Quantity">` : `<div class="nmt ${i.name ? '' : 'none'}">${esc(i.name || 'No name')}${Number(i.qty) > 1 ? ` ×${esc(i.qty)}` : ''}</div>`}${isAdmin() ? `<button class="del" data-act="delItem" data-id="${i.id}" aria-label="Delete item ${numLabel(i)}" title="Delete">${ICON.trash}</button>` : ''}</div></div>`;
 }
@@ -121,16 +137,25 @@ export function telLinks(g, big) {
   if (p && isMobile(p)) out.push(`<a class="btn sm wa" href="https://wa.me/${waNumber(p)}" target="_blank" rel="noopener" aria-label="WhatsApp ${esc(fmtPhone(p))}">${ICON.wa}${big ? ' WhatsApp' : ''}</a>`);
   return out.join('');
 }
+// Owner: is the receiver visible to the dispatcher? Dispatcher: a note while it is hidden.
+export function releaseLine(g) {
+  if (g.locked) return '<div class="rel hid">Receiver details are not released yet</div>';
+  if (!isAdmin() || g.done) return '';
+  return g.released
+    ? `<div class="rel on">Visible to dispatcher <button class="btn sm" data-act="release" data-id="${g.id}" data-on="0">Hide</button></div>`
+    : `<div class="rel hid">Hidden from dispatcher <button class="btn sm" data-act="release" data-id="${g.id}" data-on="1">Show</button></div>`;
+}
 export function groupCard(g, compact) {
   const its = itemsIn(g.id); const m = missing(g); const n = compact ? 8 : 16;
   const svcs = String(g.service || '').split('/').map((s) => s.trim()).filter(Boolean);
   return `<div class="gcard ${g.done ? 'sent' : ''}" data-key="g-${g.id}" data-big="${g.id}" ${g.done ? '' : `data-drop="${g.id}"`} style="--g:${gColor(g)}">
  <div class="gc-top"><span class="pno" title="Parcel number: write it on the box">${esc(pLabel(g))}</span><span class="gc-name">${g.done ? '✓ ' : ''}${esc(gTitle(g))}</span>${pendingBadge(g._pending)}<span class="svc ${g.service ? '' : 'none'}">${esc(svcs[0] || 'No service')}</span>${svcs.length > 1 ? `<span class="svc alt">or ${esc(svcs.slice(1).join(' / '))}</span>` : ''}</div>
- <div class="gc-sub">${esc([g.city, fmtPhone(g.phone)].filter(Boolean).join(', ') || 'No phone or city')}</div>
+ <div class="gc-sub">${esc([g.city, fmtPhone(g.phone)].filter(Boolean).join(', ') || (g.locked ? '' : 'No phone or city'))}</div>
  ${!compact && g.address ? `<div style="font-size:15px">${esc(g.address)}</div>` : ''}
  ${m.length ? `<div class="warn">Missing: ${m.join(', ')}</div>` : ''}
+ ${releaseLine(g)}
  ${g.aiPending ? `<div class="aip">AI check pending${S.online && aiAllowed() ? ` <button class="btn sm" data-act="aiCheck" data-id="${g.id}">Check now</button>` : ''}</div>` : ''}
- ${its.length ? `<div class="gthumbs">${its.slice(0, n).map((i) => `<img src="${i.photos?.[0]?.t || ''}" alt="${esc(itemLabel(i))}" title="${esc(itemLabel(i))}" loading="lazy">`).join('')}${its.length > n ? `<span class="dim">+${its.length - n}</span>` : ''}</div><div class="dim" style="font-size:14px">${esc(its.map(itemLabel).join(', '))}</div>` : `<div class="dim" style="font-size:14px;margin:6px 0">${g.done ? 'No items' : 'Drop items here'}</div>`}
+ ${its.length ? `<div class="gthumbs">${its.slice(0, n).map((i) => `<img src="${safeImg(i.photos?.[0]?.t || '')}" alt="${esc(itemLabel(i))}" title="${esc(itemLabel(i))}" loading="lazy">`).join('')}${its.length > n ? `<span class="dim">+${its.length - n}</span>` : ''}</div><div class="dim" style="font-size:14px">${esc(its.map(itemLabel).join(', '))}</div>` : `<div class="dim" style="font-size:14px;margin:6px 0">${g.done ? 'No items' : 'Drop items here'}</div>`}
  <div class="row" style="margin-top:8px">${S.sel.size && !g.done && can('group') ? `<button class="btn sm primary" data-act="addSelTo" data-id="${g.id}">Add ${S.sel.size} here</button>` : ''}${telLinks(g)}${can('group') || can('send') ? `<button class="btn sm" data-act="editGroup" data-id="${g.id}">Edit</button>` : ''}${can('send') ? `<button class="btn sm ${g.done ? '' : 'dark'}" data-act="toggleDone" data-id="${g.id}">${g.done ? 'Undo sent' : 'Mark sent'}</button>` : ''}</div></div>`;
 }
 function uploadPanel() {
@@ -229,9 +254,9 @@ function parcel(g, k) {
   const step = [...STEPS].reverse().find(([s]) => g.steps?.[s]);
   return `<div class="parcel ${g.done ? 'done' : ''}" data-key="p-${g.id}" data-big="${g.id}" style="--g:${gColor(g)}">${can('send') ? `<button class="pk" data-act="toggleDone" data-id="${g.id}" aria-label="${g.done ? 'Mark not sent' : 'Mark sent'}">${g.done ? '✓' : ''}</button>` : `<span class="pk">${g.done ? '✓' : ''}</span>`}
    <span class="p-name"><span class="pno">${esc(pLabel(g))}</span> ${esc(gTitle(g))}${g.phone ? ` <span style="font-weight:600">${esc(fmtPhone(g.phone))}</span>` : ''}${g.phone2 ? `<span class="dim" style="font-weight:500">, ${esc(fmtPhone(g.phone2))}</span>` : ''}${pendingBadge(g._pending)}${svcs.length > 1 && svcs[0] === k ? ` <span class="svc alt">or ${esc(svcs.slice(1).join(' / '))}</span>` : ''}</span>
-   <div class="p-addr">${esc(g.address || '')}${g.city ? `, <b>${esc(g.city)}</b>` : ''}${g.note ? `<div class="dim">${esc(g.note)}</div>` : ''}${m.length ? `<div class="warn">Missing: ${m.join(', ')}</div>` : ''}
+   <div class="p-addr">${esc(g.address || '')}${g.city ? `, <b>${esc(g.city)}</b>` : ''}${g.note ? `<div class="dim">${esc(g.note)}</div>` : ''}${m.length ? `<div class="warn">Missing: ${m.join(', ')}</div>` : ''}${releaseLine(g)}
    ${g.tracking || g.weight || g.charges || step ? `<div class="p-meta">${step ? `<span class="stp">${esc(step[1])}</span>` : ''}${g.tracking ? `<span>Tracking <b>${esc(g.tracking)}</b> <button class="ib" data-act="copy" data-v="${esc(g.tracking)}" aria-label="Copy tracking number">${ICON.copy}</button>${tu ? ` <a href="${esc(tu)}" target="_blank" rel="noopener">Track</a>` : ''}</span>` : ''}${g.weight ? `<span>${esc(g.weight)} kg</span>` : ''}${g.charges ? `<span>Rs ${Number(g.charges).toLocaleString('en-PK')}</span>` : ''}</div>` : ''}</div>
-   <div class="p-items">${its.length ? its.map((i) => `<span><img src="${i.photos?.[0]?.t || ''}" alt="" loading="lazy">${esc(itemLabel(i))}</span>`).join('') : '<span class="warn" style="background:none">No items in this group</span>'}</div><div class="row" style="grid-column:2;margin-top:4px"><button class="btn sm" data-act="counter" data-id="${g.id}">Show big</button>${telLinks(g)}${g.done && isMobile(g.phone) ? `<button class="btn sm" data-act="msgReceiver" data-id="${g.id}">Message receiver</button>` : ''}${can('group') || can('send') ? `<button class="btn sm" data-act="editGroup" data-id="${g.id}">Edit</button>` : ''}</div></div>`;
+   <div class="p-items">${its.length ? its.map((i) => `<span><img src="${safeImg(i.photos?.[0]?.t || '')}" alt="" loading="lazy">${esc(itemLabel(i))}</span>`).join('') : '<span class="warn" style="background:none">No items in this group</span>'}</div><div class="row" style="grid-column:2;margin-top:4px"><button class="btn sm" data-act="counter" data-id="${g.id}">Show big</button>${telLinks(g)}${g.done && isMobile(g.phone) ? `<button class="btn sm" data-act="msgReceiver" data-id="${g.id}">Message receiver</button>` : ''}${can('group') || can('send') ? `<button class="btn sm" data-act="editGroup" data-id="${g.id}">Edit</button>` : ''}</div></div>`;
 }
 function vService() {
   const un = ungrouped(); let h = dashboard();
@@ -249,7 +274,7 @@ function vService() {
     const gs = showS ? [...open, ...sent] : open;
     const items = open.reduce((a, g) => a + piecesIn(g.id), 0);
     const kg = all.reduce((s, g) => s + (Number(g.weight) || 0), 0), rs = all.reduce((s, g) => s + (Number(g.charges) || 0), 0);
-    h += `<section class="svc-sec" data-key="sec-${esc(k)}"><div class="svc-h"><h2>${esc(k)}</h2><span class="dim grow" style="font-weight:600">${open.length ? `${plural(open.length, 'parcel')} to send, ${plural(items, 'piece')}` : 'All sent'}${sent.length ? `, ${sent.length} sent` : ''}${kg ? `, ${+kg.toFixed(2)} kg` : ''}${rs ? `, Rs ${rs.toLocaleString('en-PK')}` : ''}</span>${open.length && can('send') && k !== 'No service yet' ? `<button class="btn sm dark" data-act="sendAll" data-v="${esc(k)}">Mark all ${esc(k)} sent</button>` : ''}${sent.length ? `<button class="btn sm" data-act="openSent" data-v="${esc(k)}">${showS ? 'Hide sent' : 'Show sent'}</button>` : ''}</div>${gs.map((g) => parcel(g, k)).join('')}</section>`;
+    h += `<section class="svc-sec" data-key="sec-${esc(k)}"><div class="svc-h"><h2>${esc(k)}</h2><span class="dim grow" style="font-weight:600">${open.length ? `${plural(open.length, 'parcel')} to send, ${plural(items, 'piece')}` : 'All sent'}${sent.length ? `, ${sent.length} sent` : ''}${kg ? `, ${+kg.toFixed(2)} kg` : ''}${rs ? `, Rs ${rs.toLocaleString('en-PK')}` : ''}</span>${open.length && can('send') && k !== 'No service yet' ? `<button class="btn sm dark" data-act="sendAll" data-v="${esc(k)}">Mark all ${esc(k)} sent</button>` : ''}${isAdmin() && open.some((g) => !g.released) ? `<button class="btn sm" data-act="releaseSvc" data-v="${esc(k)}">Show all ${esc(k)} to dispatcher</button>` : ''}${sent.length ? `<button class="btn sm" data-act="openSent" data-v="${esc(k)}">${showS ? 'Hide sent' : 'Show sent'}</button>` : ''}</div>${gs.map((g) => parcel(g, k)).join('')}</section>`;
   }
   return h;
 }

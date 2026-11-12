@@ -1,5 +1,5 @@
 // Calls to our Cloudflare Pages Functions, and AI with offline fallback.
-import { S, auth } from './core.js';
+import { S, auth, isStaff } from './core.js';
 import { localParse, fixUp, splitChat } from './parse.js';
 
 export async function api(path, data, { authed = true } = {}) {
@@ -19,7 +19,7 @@ export async function api(path, data, { authed = true } = {}) {
   return d;
 }
 
-export const aiAllowed = () => !!S.me && (S.me.role === 'admin' || S.me.perms?.ai) && !S.cfg.aiOff && !S.aiLocalOff;
+export const aiAllowed = () => isStaff() && !S.me.viewAs && !S.cfg.aiOff && !S.aiLocalOff;
 const whyText = (e) => (e?.offline || !navigator.onLine ? 'offline' : e?.status === 429 ? 'the free AI limit is reached for now' : e?.message === 'not_configured' ? 'AI key is not set up yet' : e?.message === 'ai_off' ? 'AI is turned off' : e?.message === 'ai_busy' || e?.status === 503 || e?.status === 504 ? 'AI is busy right now, try again in a minute' : 'AI error');
 
 // One message -> fields. Always returns something (local parser fallback).

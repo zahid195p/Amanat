@@ -1,5 +1,5 @@
 // Photo compression, upload queue and full-photo loading.
-import { S, D, rid, now, put, upd, w, toast, plural, schedule, getDoc, increment, nextTmp, logEv, can, setDoc } from './core.js';
+import { S, D, rid, now, put, upd, w, toast, plural, schedule, getDoc, increment, nextTmp, logEv, can, setDoc, curFlight } from './core.js';
 
 const isHeic = (f) => /\.(heic|heif)$/i.test(f?.name || '') || /hei[cf]/i.test(f?.type || '');
 export async function decode(file) {
@@ -54,10 +54,10 @@ export async function fullPhoto(pid, col = 'photos') {
 export function handleFiles(files) {
   const list = [...files].filter((f) => /^image\//.test(f.type) || /\.(heic|heif|jpe?g|png|webp)$/i.test(f.name || ''));
   if (!list.length) { toast('Pick photos (JPG, PNG or HEIC).'); return; }
-  if (!can('upload')) { toast('Your profile cannot add photos.'); return; }
+  if (!can('upload') || S.me.viewAs) { toast(S.me.viewAs ? 'You are only viewing. Nothing was changed.' : 'This login cannot add photos.'); return; }
   if (!S.fid) { toast('Add a flight first.'); return; }
   let tmp = Math.max(nextTmp(), ...S.uq.map((u) => (u.tmp || 0) + 1));
-  for (const f of list) S.uq.push({ id: rid(), file: f, name: f.name || 'photo', status: 'waiting', fid: S.fid, tmp: tmp++ });
+  for (const f of list) S.uq.push({ id: rid(), file: f, name: f.name || 'photo', status: 'waiting', fid: S.fid, dids: curFlight()?.dids || [], tmp: tmp++ });
   schedule(); pump();
 }
 let running = 0;
@@ -74,7 +74,7 @@ async function work(job) {
     const pid = rid(), iid = rid();
     cachePhoto(pid, full);
     const pw = setDoc(D('photos/' + pid), { fid: job.fid, d: full, at: now() });
-    const iw = setDoc(D('items/' + iid), { fid: job.fid, n: null, tmp: job.tmp, name: '', qty: null, photos: [{ p: pid, t: thumb, s: full.length }], groupId: '', at: now(), by: S.me.uid });
+    const iw = setDoc(D('items/' + iid), { fid: job.fid, dids: job.dids, n: null, tmp: job.tmp, name: '', qty: null, photos: [{ p: pid, t: thumb, s: full.length }], groupId: '', at: now(), by: S.me.uid });
     w(pw, 'photo'); w(iw, 'item');
     upd('flights/' + job.fid, { bytes: increment(full.length + thumb.length) });
     job.status = 'saved'; job.file = null; schedule();

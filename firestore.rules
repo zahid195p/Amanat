@@ -1,5 +1,6 @@
 rules_version = '2';
-// Amanat security rules. Paste into Firebase console > Firestore > Rules, then Publish.
+// Amanat security rules. Deployed by scripts/deploy-rules.mjs from the Deploy workflow.
+// The first block is version 1 (the current live app) and is left unchanged.
 // Roles and permissions come from the login token (minted by /api/login).
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -58,6 +59,78 @@ service cloud.firestore {
       allow read, create, update: if authed();
       allow delete: if admin();
     }
+    // ===== Version 2: everything lives under /apps/{space} ("test" or "live") =====
+    // Roles come from the login token. dev/owner see everything. A dispatcher sees only the
+    // flights they are on, and a receiver's contact only after the owner releases it.
+    // Clients and passengers get nothing here: their pages are served by the server.
+    match /apps/{space} {
+      function me() { return request.auth != null && request.auth.token.env == space; }
+      function writer() { return request.auth.token.get('viewAs', false) != true; }
+      function boss() { return me() && request.auth.token.role in ['dev', 'owner']; }
+      function bossW() { return boss() && writer(); }
+      function disp() { return me() && request.auth.token.role == 'dispatcher'; }
+      function dispW() { return disp() && writer(); }
+      function pid() { return request.auth.token.pid; }
+      function mine() { return disp() && pid() in resource.data.dids; }
+      function diff() { return request.resource.data.diff(resource.data).affectedKeys(); }
+      function onFlight(fid) { return pid() in get(/databases/$(database)/documents/apps/$(space)/flights/$(fid)).data.dids; }
+
+      match /people/{id} {
+        allow read: if boss();
+        allow write: if bossW();
+      }
+      match /config/{id} {
+        allow read: if boss() || disp();
+        allow write: if bossW();
+      }
+      match /flights/{id} {
+        allow read: if boss() || mine();
+        allow create, delete: if bossW();
+        allow update: if bossW() || (mine() && writer() && diff().hasOnly(['nextN', 'bytes']));
+      }
+      match /items/{id} {
+        allow read: if boss() || mine();
+        allow create: if bossW() || (dispW() && request.resource.data.fid is string
+          && pid() in request.resource.data.dids && onFlight(request.resource.data.fid)
+          && request.resource.data.get('groupId', '') == '');
+        allow update: if bossW() || (mine() && writer() && diff().hasOnly(['name', 'qty', 'note', 'photos', 'n', 'recv']));
+        allow delete: if bossW();
+      }
+      // Full-size photos and booking slips are fetched one by one by id (ids are random).
+      match /photos/{id} {
+        allow get: if boss() || disp();
+        allow list: if boss();
+        allow create: if bossW() || dispW();
+        allow update, delete: if bossW();
+      }
+      match /receipts/{id} {
+        allow get: if boss() || disp();
+        allow list: if boss();
+        allow create, delete: if bossW() || dispW();
+        allow update: if bossW();
+      }
+      match /groups/{id} {
+        allow read: if boss() || mine();
+        allow create, delete: if bossW();
+        allow update: if bossW() || (mine() && writer()
+          && diff().hasOnly(['done', 'steps', 'tracking', 'receipt', 'packed', 'weight', 'charges']));
+      }
+      // Receiver name, phones and address. "rel" lists the dispatchers it is released to.
+      match /groupsPrivate/{id} {
+        allow read: if boss() || (disp() && pid() in resource.data.rel);
+        allow write: if bossW();
+      }
+      match /log/{id} {
+        allow read: if boss();
+        allow create: if (boss() || disp()) && writer();
+        allow delete: if bossW();
+      }
+      match /book/{id} {
+        allow read: if boss();
+        allow write: if bossW();
+      }
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

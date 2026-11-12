@@ -4,7 +4,7 @@
 //   {task:'image', image:dataURL}   -> {result:[{name,phone,...}]}
 //   {task:'name',  images:[{id,image}]} -> {result:[{id,name}]}
 // The Gemini key stays on the server. Model: GEMINI_MODEL, else gemini-flash-latest.
-import { json, fail, body, verifyUser } from '../../server/lib.js';
+import { json, fail, body, verifyUser, kvKey } from '../../server/lib.js';
 import { PARSE_PROMPT, SERVICES } from '../../src/parse.js';
 
 // Fast model first (answers in ~0.5-2 s); the bigger flash model is often overloaded and slow.
@@ -68,9 +68,9 @@ async function gemini(env, parts, schema, ms = 15000) {
 export async function onRequestPost({ request, env }) {
   const me = await verifyUser(request, env);
   if (!me) return fail(401, 'Log in again.');
-  if (!me.perms.ai) return fail(403, 'AI is turned off for this profile.');
+  if (!me.staff) return fail(403, 'AI is not available for this login.');
   if (!env.GEMINI_API_KEY) return fail(503, 'not_configured');
-  if ((await env.AMANAT_KV.get('cfg:aiOff')) === '1') return fail(503, 'ai_off');
+  if ((await env.AMANAT_KV.get(kvKey(request, 'cfg:aiOff'))) === '1') return fail(503, 'ai_off');
   const b = await body(request);
   let out;
   if (b.task === 'parse') {

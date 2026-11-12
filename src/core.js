@@ -1,29 +1,29 @@
 // State, helpers, Firebase wiring, UI primitives (toast, sheets, history) and all data writes.
-import { initializeApp } from 'firebase/app';
+import { initializeApp, deleteApp } from 'firebase/app';
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager, CACHE_SIZE_UNLIMITED,
   connectFirestoreEmulator, collection, doc, query, where, onSnapshot, setDoc, updateDoc, deleteDoc,
-  getDoc, getDocs, writeBatch, runTransaction, increment, waitForPendingWrites, deleteField,
+  getDoc, getDocs, writeBatch, runTransaction, increment, waitForPendingWrites, deleteField, getFirestore, memoryLocalCache,
 } from 'firebase/firestore';
 import {
   initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, connectAuthEmulator,
-  signInWithCustomToken, signOut, onAuthStateChanged,
+  signInWithCustomToken, signOut, onAuthStateChanged, inMemoryPersistence,
 } from 'firebase/auth';
 import { firebaseConfig } from './firebase-config.js';
 import { FIELDS, phoneKey, fmtPhone, SVC_ORDER } from './parse.js';
+import { envOfHost } from './env.js';
+
+export const SPACE = envOfHost(location.hostname); // 'live' on the real site, 'test' anywhere else
 
 export { fmtPhone };
 export const GC = ['#D99A00', '#2D6FC7', '#C3362B', '#1E8757', '#8440A8', '#C75B12', '#12918F', '#6D4C41', '#C2185B', '#4F6475'];
 export const PROFILE_COLORS = ['#2D6FC7', '#1E8757', '#C3362B', '#8440A8', '#C75B12', '#12918F', '#D99A00', '#C2185B'];
 export const STEPS = [['arrived', 'Arrived'], ['packed', 'Packed'], ['booked', 'Booked'], ['sent', 'Sent'], ['delivered', 'Delivered']];
-export const PERM_LABELS = {
-  upload: 'Add photos', name: 'Name items', group: 'Make and edit groups', send: 'Mark parcels sent, tracking, receipts',
-  flights: 'Add flights', ai: 'Use AI', export: 'Export and download',
-};
-export const DEFAULT_PERMS = {
-  admin: { upload: true, name: true, group: true, send: true, flights: true, ai: true, export: true },
-  sorter: { upload: false, name: false, group: true, send: true, flights: false, ai: true, export: false },
-};
+export const ROLE_LABEL = { dev: 'Developer', owner: 'Owner', dispatcher: 'Dispatcher', client: 'Client', passenger: 'Passenger' };
+// What a dispatcher may do. The owner and developer may do everything.
+const DISPATCHER_CAN = { upload: true, name: true, send: true, ai: true };
+// Receiver details live in a separate locked document (groupsPrivate) until the owner releases them.
+export const PRIVATE_FIELDS = ['name', 'phone', 'phone2', 'address', 'raw'];
 export const DEFAULT_WA = 'Assalam o Alaikum {name}. Your parcel was sent by {service}, tracking # {tracking}, {pieces} pieces.';
 export const DEFAULT_TRACK = {
   TCS: 'https://www.tcsexpress.com/track/{n}',
@@ -35,7 +35,7 @@ export const FREE_BYTES = 1024 * 1024 * 1024; // Firestore Spark: 1 GiB stored
 /* ---------- state ---------- */
 export const S = {
   ready: false, configured: !!firebaseConfig.projectId, fatal: null,
-  user: undefined, me: null, profiles: [], profilesLoaded: false, setup: null,
+  user: undefined, me: null, people: [], setup: null, real: null,
   cfg: {}, flights: [], flightsLoaded: false, flightsFromCache: true,
   fid: null, items: [], groups: [], itemsLoaded: false,
   tab: 'photos', show: null, sel: new Set(), lastSel: null, q: '',
@@ -61,12 +61,14 @@ export const todayISO = () => { const d = new Date(); d.setMinutes(d.getMinutes(
 export function fmtDate(d) { if (!d) return ''; const x = new Date(d + 'T00:00:00'); return isNaN(x) ? d : x.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); }
 export function fmtTime(t) { if (!t) return ''; const d = new Date(t); return d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); }
 export function fmtBytes(b) { b = Math.max(0, b || 0); if (b < 1024 * 1024) return Math.round(b / 1024) + ' KB'; if (b < 1024 ** 3) return (b / 1024 / 1024).toFixed(1) + ' MB'; return (b / 1024 ** 3).toFixed(2) + ' GB'; }
-export const isAdmin = () => S.me?.role === 'admin';
-export const can = (p) => isAdmin() || !!S.me?.perms?.[p];
+export const isAdmin = () => S.me?.role === 'dev' || S.me?.role === 'owner'; // "boss": sees and does everything
+export const isDispatcher = () => S.me?.role === 'dispatcher';
+export const isStaff = () => isAdmin() || isDispatcher();
+export const can = (p) => isAdmin() || (isDispatcher() && !!DISPATCHER_CAN[p]);
 export const curFlight = () => S.flights.find((f) => f.id === S.fid) || null;
 export const groupById = (id) => (id ? S.groups.find((g) => g.id === id) : null);
 export const gColor = (g) => GC[(g?.ci || 0) % GC.length];
-export const gTitle = (g) => (g ? g.name || 'No name yet' : '');
+export const gTitle = (g) => (g ? (g.locked ? 'Receiver hidden' : g.name || 'No name yet') : '');
 // Parcel number, written on the box while packing: P1, P2… per flight ("P~3" until it syncs).
 export const pLabel = (g) => (!g ? '' : g.pn ? 'P' + g.pn : 'P~' + (g.ptmp || '?'));
 export const gLabel = (g) => (g ? `${pLabel(g)} ${gTitle(g)}` : '');
@@ -80,7 +82,9 @@ export const qtyOf = (i) => (Number(i.qty) > 0 ? Number(i.qty) : 1);
 export const piecesIn = (gid) => itemsIn(gid).reduce((s, i) => s + qtyOf(i), 0);
 export const numLabel = (i) => (i.n ? '#' + i.n : '#~' + (i.tmp || '?'));
 export const itemLabel = (i) => (i.name || 'Item ' + numLabel(i)) + (Number(i.qty) > 1 ? ' ×' + i.qty : '');
-export const profName = (uid) => S.profiles.find((p) => p.id === uid)?.name || (uid === S.me?.uid ? S.me?.name : '') || 'Someone';
+export const profName = (uid) => S.people.find((p) => p.id === uid)?.name || (uid === S.me?.uid ? S.me?.name : '') || '';
+// Only genuine image data may go into the page (a crafted "photo" must never become code).
+export const safeImg = (t) => (typeof t === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(t) ? t : '');
 export const mainSvc = (s) => String(s || '').split('/')[0].trim();
 export function svcKey(s) { const t = mainSvc(s); return t || 'No service yet'; }
 export function svcSort(a, b) {
@@ -90,6 +94,7 @@ export function svcSort(a, b) {
 }
 export function missing(g) {
   const m = [];
+  if (g.locked) return m;
   if (!g.name) m.push('name');
   if (!String(g.phone || '').replace(/\D/g, '')) m.push('phone');
   if (!g.address) m.push('address');
@@ -196,15 +201,45 @@ export function initFirebase() {
   const app = initializeApp(EMU ? { apiKey: 'demo', projectId: 'demo-amanat', appId: 'demo' } : firebaseConfig);
   db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager(), cacheSizeBytes: CACHE_SIZE_UNLIMITED }) });
   auth = initializeAuth(app, { persistence: [indexedDBLocalPersistence, browserLocalPersistence] });
-  if (EMU) {
-    connectFirestoreEmulator(db, location.hostname, 8080);
-    connectAuthEmulator(auth, `http://${location.hostname}:9099`, { disableWarnings: true });
-    S.configured = true;
-  }
+  if (EMU) { useEmulators(db, auth); S.configured = true; }
+  main = { db, auth };
   return true;
 }
+function useEmulators(d, a) {
+  connectFirestoreEmulator(d, location.hostname, 8080);
+  connectAuthEmulator(a, `http://${location.hostname}:9099`, { disableWarnings: true });
+}
+let main = null, viewApp = null;
+/* ---------- view as ----------
+   A second, separate sign-in with a read-only token for that person. The screen then shows
+   exactly what the database rules let them see; nothing can be changed while viewing. */
+export async function enterViewAs(token, person) {
+  flushAll(); commitUndos(); unsubscribeAll();
+  viewApp = initializeApp(EMU ? { apiKey: 'demo', projectId: 'demo-amanat', appId: 'demo' } : firebaseConfig, 'view-' + Date.now());
+  const vdb = initializeFirestore(viewApp, { localCache: memoryLocalCache() });
+  const vauth = initializeAuth(viewApp, { persistence: inMemoryPersistence });
+  if (EMU) useEmulators(vdb, vauth);
+  await signInWithCustomToken(vauth, token);
+  db = vdb; auth = vauth;
+  S.real = S.me; S.me = { uid: person.id, role: person.role, name: person.name, viewAs: true };
+  resetData(); if (isStaff()) subscribeBase(); schedule();
+}
+export async function exitViewAs() {
+  if (!S.real) return;
+  unsubscribeAll();
+  const app = viewApp; viewApp = null;
+  db = main.db; auth = main.auth;
+  S.me = S.real; S.real = null;
+  resetData(); subscribeBase(); schedule();
+  try { await deleteApp(app); } catch (e) { /* ignore */ }
+}
+function resetData() {
+  S.flights = []; S.flightsLoaded = false; S.items = []; S.groups = []; S.people = []; S.cfg = {}; S.sel.clear(); S.uq = []; S.fid = main && db === main.db ? S.fid : null;
+}
+const viewing = () => { if (S.me?.viewAs) { toast('You are only viewing. Nothing was changed.'); return true; } return false; };
 export { onAuthStateChanged, signInWithCustomToken, signOut, waitForPendingWrites };
-export const D = (path) => doc(db, path);
+export const D = (path) => doc(db, 'apps/' + SPACE + '/' + path);
+export const C = (name) => collection(db, 'apps', SPACE, name);
 
 // Every write: fire and forget, counted for the sync pill, never awaited by the UI.
 export function w(p, what) {
@@ -217,10 +252,33 @@ export function w(p, what) {
   }).finally(() => { S.inflight = Math.max(0, S.inflight - 1); schedule(); });
   return p;
 }
-export const upd = (path, data) => w(updateDoc(D(path), data), 'update ' + path);
-export const put = (path, data) => w(setDoc(D(path), data), 'set ' + path);
-export const del = (path) => w(deleteDoc(D(path)), 'delete ' + path);
-export { increment, deleteField, getDoc, getDocs, collection, query, where, writeBatch, doc, setDoc, runTransaction };
+// Group writes are split: receiver details go to the locked groupsPrivate document.
+function splitGroup(data) {
+  const pub = {}, priv = {};
+  for (const [k, v] of Object.entries(data)) (PRIVATE_FIELDS.includes(k) ? priv : pub)[k] = v;
+  return [pub, priv];
+}
+const isGroup = (path) => path.startsWith('groups/');
+export const upd = (path, data) => {
+  if (viewing()) return;
+  if (!isGroup(path)) return w(updateDoc(D(path), data), 'update ' + path);
+  const [pub, priv] = splitGroup(data);
+  if (Object.keys(pub).length) w(updateDoc(D(path), pub), 'update ' + path);
+  if (Object.keys(priv).length) w(updateDoc(D('groupsPrivate/' + path.slice(7)), priv), 'update private ' + path);
+};
+export const put = (path, data) => {
+  if (viewing()) return;
+  if (!isGroup(path)) return w(setDoc(D(path), data), 'set ' + path);
+  const [pub, priv] = splitGroup(data);
+  w(setDoc(D(path), pub), 'set ' + path);
+  w(setDoc(D('groupsPrivate/' + path.slice(7)), { fid: pub.fid, dids: pub.dids || [], released: false, rel: [], ...priv }), 'set private ' + path);
+};
+export const del = (path) => {
+  if (viewing()) return;
+  if (isGroup(path)) w(deleteDoc(D('groupsPrivate/' + path.slice(7))), 'delete private ' + path);
+  return w(deleteDoc(D(path)), 'delete ' + path);
+};
+export { increment, deleteField, getDoc, getDocs, collection, query, where, writeBatch, doc, setDoc, updateDoc, runTransaction };
 
 /* ---------- debounced field saves (name/qty typing) — B12 ---------- */
 const pend = new Map();
@@ -236,28 +294,35 @@ export const flushAll = () => [...pend.keys()].forEach(flush);
 
 /* ---------- activity log ---------- */
 export function logEv(text, fid = S.fid) {
-  if (!fid || !S.me) return;
+  if (!fid || !S.me || S.me.viewAs) return;
   put('log/' + rid(), { fid, at: now(), by: S.me.uid, text: `${S.me.name} ${text}` });
 }
 
 /* ---------- subscriptions ---------- */
 let unsubBase = [], unsubF = [];
-const docsOf = (q) => q.docs.map((d) => ({ id: d.id, ...d.data(), _pending: d.metadata.hasPendingWrites }));
-export function subscribeProfiles() {
-  return onSnapshot(collection(db, 'profiles'), (q) => {
-    S.profiles = docsOf(q).sort((a, b) => (a.at || 0) - (b.at || 0));
-    S.profilesLoaded = true;
-    if (S.me) { const p = S.profiles.find((x) => x.id === S.me.uid); if (p) S.me.name = p.name; }
-    schedule();
-  }, (e) => { console.warn(e); S.profilesLoaded = true; schedule(); });
-}
+// Data is cleaned as it arrives: odd ids are dropped and numbers must be numbers, so nothing
+// a person saved can ever turn into code on someone else's screen.
+const OK_ID = /^[A-Za-z0-9_-]{1,80}$/;
+const docsOf = (q) => q.docs.filter((d) => OK_ID.test(d.id)).map((d) => {
+  const o = { id: d.id, ...d.data(), _pending: d.metadata.hasPendingWrites };
+  for (const k of ['n', 'tmp', 'pn', 'ptmp', 'ci']) if (k in o && !(typeof o[k] === 'number' && isFinite(o[k]))) o[k] = null;
+  if (o.photos && !Array.isArray(o.photos)) o.photos = [];
+  return o;
+});
+// The owner sees every flight; a dispatcher only the flights they are on.
+const mineOnly = () => where('dids', 'array-contains', S.me.uid);
 export function subscribeBase() {
   unsubBase.forEach((u) => u()); unsubBase = [];
   unsubBase.push(onSnapshot(D('config/main'), (s) => { S.cfg = s.exists() ? s.data() : {}; schedule(); }, dbErr));
-  unsubBase.push(onSnapshot(collection(db, 'flights'), { includeMetadataChanges: true }, (q) => {
+  unsubBase.push(onSnapshot(isAdmin() ? C('flights') : query(C('flights'), mineOnly()), { includeMetadataChanges: true }, (q) => {
     S.flights = docsOf(q).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || (b.at || 0) - (a.at || 0));
     S.flightsLoaded = true; S.flightsFromCache = q.metadata.fromCache;
     pickFlight(); schedule();
+  }, dbErr));
+  if (isAdmin()) unsubBase.push(onSnapshot(C('people'), (q) => {
+    S.people = docsOf(q).sort((a, b) => (a.at || 0) - (b.at || 0));
+    const p = S.people.find((x) => x.id === S.me?.uid); if (p && S.me) S.me.name = p.name;
+    schedule();
   }, dbErr));
 }
 export function unsubscribeAll() {
@@ -274,21 +339,37 @@ function pickFlight() {
 }
 export function setFlight(fid) {
   flushAll(); commitUndos(); // B12
-  S.fid = fid; S.subbed = fid; lsSet('amanat3.fid', fid); S.sel.clear(); S.show = null; S.gridLimit = 120;
+  S.fid = fid; S.subbed = fid; if (!S.me?.viewAs) lsSet('amanat3.fid', fid); S.sel.clear(); S.show = null; S.gridLimit = 120;
   unsubF.forEach((u) => u()); unsubF = []; S.items = []; S.groups = []; S.itemsLoaded = false;
+  gPub = []; gPriv = new Map();
   if (fid) {
-    unsubF.push(onSnapshot(query(collection(db, 'items'), where('fid', '==', fid)), { includeMetadataChanges: true }, (q) => {
-      S.items = docsOf(q).sort((a, b) => (a.n || 1e9) - (b.n || 1e9) || (a.at || 0) - (b.at || 0));
+    // A dispatcher's queries must match the rules exactly ("only what I am on"), so they ask
+    // for everything of theirs and the flight is picked out here.
+    const boss = isAdmin();
+    const q1 = (name, field = 'dids') => (boss ? query(C(name), where('fid', '==', fid)) : query(C(name), where(field, 'array-contains', S.me.uid)));
+    const ofFlight = (q) => docsOf(q).filter((d) => d.fid === fid);
+    unsubF.push(onSnapshot(q1('items'), { includeMetadataChanges: true }, (q) => {
+      S.items = ofFlight(q).sort((a, b) => (a.n || 1e9) - (b.n || 1e9) || (a.at || 0) - (b.at || 0));
       S.itemsLoaded = true;
       for (const id of [...S.sel]) if (!S.items.some((i) => i.id === id)) S.sel.delete(id);
       countPending(); schedule(); numberItems();
     }, dbErr));
-    unsubF.push(onSnapshot(query(collection(db, 'groups'), where('fid', '==', fid)), { includeMetadataChanges: true }, (q) => {
-      S.groups = docsOf(q).sort((a, b) => (a.pn || 1e9) - (b.pn || 1e9) || (a.at || 0) - (b.at || 0));
-      countPending(); schedule(); numberDocs('groups');
-    }, dbErr));
+    unsubF.push(onSnapshot(q1('groups'), { includeMetadataChanges: true }, (q) => { gPub = ofFlight(q); mergeGroups(); numberDocs('groups'); }, dbErr));
+    unsubF.push(onSnapshot(q1('groupsPrivate', 'rel'), { includeMetadataChanges: true }, (q) => { gPriv = new Map(ofFlight(q).map((d) => [d.id, d])); mergeGroups(); }, dbErr));
   }
   schedule();
+}
+// A group on screen = its open part + the receiver details, when this login may see them.
+let gPub = [], gPriv = new Map();
+function mergeGroups() {
+  S.groups = gPub.map((g) => {
+    const p = gPriv.get(g.id);
+    if (!p) return { ...g, locked: true };
+    const o = { ...g, released: !!p.released, _pending: g._pending || p._pending };
+    for (const k of PRIVATE_FIELDS) o[k] = p[k] ?? '';
+    return o;
+  }).sort((a, b) => (a.pn || 1e9) - (b.pn || 1e9) || (a.at || 0) - (b.at || 0));
+  countPending(); schedule();
 }
 function countPending() { S.pendingDocs = S.items.filter((i) => i._pending).length + S.groups.filter((g) => g._pending).length; }
 
@@ -309,7 +390,7 @@ const NUMBERING = {
 const numbering = {};
 async function numberDocs(col) {
   const c = NUMBERING[col];
-  if (numbering[col] || !S.fid || !navigator.onLine || !S.me || !c.allowed()) return;
+  if (numbering[col] || !S.fid || !navigator.onLine || !S.me || S.me.viewAs || !c.allowed()) return;
   const all = c.list();
   const todo = all.filter((d) => !d[c.field] && !d._pending).sort((a, b) => (a.at || 0) - (b.at || 0) || a.id.localeCompare(b.id)).slice(0, 40);
   if (!todo.length) return;
@@ -342,7 +423,7 @@ export function newGroup(data, assignIds = []) {
   const id = rid();
   const ptmp = S.groups.reduce((m, g) => Math.max(m, g.pn || 0, g.ptmp || 0), 0) + 1 + (S.gBump - 1);
   put('groups/' + id, {
-    fid: S.fid, ci, pn: null, ptmp, ...clean, raw: data.raw || '', done: false, at: now(), by: S.me.uid,
+    fid: S.fid, dids: curFlight()?.dids || [], ci, pn: null, ptmp, ...clean, raw: data.raw || '', done: false, at: now(), by: S.me.uid,
     aiPending: !!data.aiPending, tracking: '', weight: null, charges: null,
     steps: { arrived: { at: now(), by: S.me.uid } }, packed: {},
   });
@@ -352,12 +433,12 @@ export function newGroup(data, assignIds = []) {
   return id;
 }
 export function saveBook(d) {
-  const k = phoneKey(d.phone); if (!k) return;
+  const k = phoneKey(d.phone); if (!k || !isAdmin() || S.me.viewAs) return;
   const rec = { at: now() }; for (const f of ['name', 'phone', 'phone2', 'address', 'city', 'service']) if (d[f]) rec[f] = d[f];
   w(setDoc(D('book/' + k), rec, { merge: true }), 'book');
 }
 export async function lookupBook(phone) {
-  const k = phoneKey(phone); if (!k) return null;
+  const k = phoneKey(phone); if (!k || !isAdmin()) return null;
   try { const s = await getDoc(D('book/' + k)); return s.exists() ? s.data() : null; } catch (e) { return null; }
 }
 export function moveItems(ids, gid, quiet) {
@@ -428,4 +509,41 @@ export function setStep(g, key, on) {
   if (key === 'sent') patch.done = on;
   upd('groups/' + g.id, patch);
   logEv(`${on ? 'set' : 'cleared'} "${key}" for ${gLabel(g)}`);
+}
+
+/* ---------- releases: who may see a receiver's details ---------- */
+export function setRelease(gids, on) {
+  if (!isAdmin() || viewing()) return;
+  const dids = curFlight()?.dids || [];
+  const gs = gids.map(groupById).filter(Boolean);
+  gs.forEach((g) => w(updateDoc(D('groupsPrivate/' + g.id), { released: on, rel: on ? dids : [], relAt: on ? now() : null, relBy: on ? S.me.uid : null }), 'release'));
+  logEv(`${on ? 'released' : 'hid'} receiver details: ${gs.map(pLabel).join(', ')}`);
+  toast(on ? `${plural(gs.length, 'receiver')} now visible to the dispatcher` : `${plural(gs.length, 'receiver')} hidden from the dispatcher`);
+}
+// Put dispatchers on a flight. Every item and parcel of the flight carries the same list,
+// because the database rules check it on each document.
+export async function setFlightDispatchers(fid, dids) {
+  if (!isAdmin() || viewing()) return;
+  const refs = [];
+  for (const name of ['items', 'groups', 'groupsPrivate']) {
+    const q = await getDocs(query(C(name), where('fid', '==', fid)));
+    q.docs.forEach((d) => refs.push([d.ref, name === 'groupsPrivate' ? { dids, rel: d.data().released ? dids : [] } : { dids }]));
+  }
+  for (let k = 0; k < refs.length; k += 400) {
+    const b = writeBatch(db); refs.slice(k, k + 400).forEach(([r, data]) => b.update(r, data)); await b.commit();
+  }
+  await updateDoc(D('flights/' + fid), { dids });
+}
+
+// Local test builds only: lets the end-to-end test try to go around the app and hit the
+// database directly, to prove the rules (not just the screens) keep things private.
+if (EMU) {
+  const res = (p) => p.then((x) => 'ok:' + (x?.size ?? (x?.exists ? x.exists() : '')), (e) => e.code || String(e));
+  window.__t = {
+    get: (path) => res(getDoc(D(path))),
+    list: (name) => res(getDocs(C(name))),
+    del: (path) => res(deleteDoc(D(path))),
+    upd: (path, data) => res(updateDoc(D(path), data)),
+    ids: () => ({ items: S.items.map((i) => i.id), groups: S.groups.map((g) => g.id), fid: S.fid }),
+  };
 }

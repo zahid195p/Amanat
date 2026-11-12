@@ -7,7 +7,7 @@ import '@fontsource/barlow-condensed/700.css';
 import './style.css';
 import {
   S, $, $$, now, plural, isAdmin, can, groupById, active, toSend, ungrouped, visItems, toast, closeSheet, closeTop, layerCount, ask, choose,
-  schedule, setRender, DRAG, initFirebase, auth, onAuthStateChanged, signInWithCustomToken, subscribeProfiles, subscribeBase,
+  schedule, setRender, DRAG, initFirebase, auth, onAuthStateChanged, signInWithCustomToken, subscribeBase, SPACE, ROLE_LABEL, isStaff, setRelease, exitViewAs,
   unsubscribeAll, setFlight, saveLater, moveItems, combine, deleteItems, setDone, svcKey, lsSet, waitForPendingWrites, db, numberItems, put, now as tnow,
 } from './core.js';
 import { render, shownItems } from './views.js';
@@ -15,7 +15,7 @@ import { handleFiles, retryUpload, dropUpload, clearUploads } from './images.js'
 import { api } from './api.js';
 import {
   openGroupSheet, openPickGroup, openViewer, viewerOpen, viewerNav, openCounter, openFlights, createFlight, downloadMD, downloadCSV,
-  deleteFlight, archiveFlight, openActivity, backup, restore, openMenu, openProfile, switchProfile, openBulk, readShot, aiName, aiCheck,
+  deleteFlight, archiveFlight, openActivity, backup, restore, openMenu, openPeople, showMyLink, switchProfile, openBulk, readShot, aiName, aiCheck,
   msgReceiver, copy,
 } from './sheets.js';
 
@@ -23,52 +23,75 @@ try { const t = localStorage.getItem('amanat3.theme'); if (t) document.documentE
 setRender(render);
 
 /* ---------- boot ---------- */
+// The private link looks like https://…/#k=<key>. The key is remembered on this device,
+// so next time only the code is asked.
+function readKey() {
+  const m = /[#&?]k=([A-Za-z0-9_-]{10,60})/.exec(location.hash + location.search);
+  if (m) { lsSet('amanat4.key', m[1]); history.replaceState(null, '', location.pathname); }
+  try { S.key = localStorage.getItem('amanat4.key') || ''; } catch (e) { S.key = m ? m[1] : ''; }
+}
 function boot() {
   if (!initFirebase()) { render(); return; }
   navigator.storage?.persist?.().catch(() => {});
-  subscribeProfiles();
+  readKey();
+  addEventListener('hashchange', () => { readKey(); if (!S.me) whoAmI(); });
   onAuthStateChanged(auth, async (u) => {
+    if (S.real) return; // viewing as someone else: the real login is untouched
     S.user = u || null;
-    if (!u) { S.me = null; unsubscribeAll(); schedule(); maybeSetup(); return; }
+    if (!u) { S.me = null; unsubscribeAll(); schedule(); whoAmI(); return; }
     try {
       const r = await u.getIdTokenResult();
-      const role = r.claims.role;
-      if (!['admin', 'sorter'].includes(role)) { S.me = null; schedule(); return; }
-      S.me = { uid: u.uid, role, perms: r.claims.perms || {}, name: S.profiles.find((p) => p.id === u.uid)?.name || '' };
-      S.loginPick = null; S.loginErr = '';
-      subscribeBase();
-      waitForPendingWrites(db).then(() => { S.pendingDocs = 0; schedule(); }).catch(() => {});
+      const c = r.claims;
+      if (c.env !== SPACE || !ROLE_LABEL[c.role]) { S.me = null; S.user = null; schedule(); whoAmI(); return; }
+      S.me = { uid: c.pid, role: c.role, name: c.name || '' };
+      S.loginErr = '';
+      if (isStaff()) {
+        subscribeBase();
+        waitForPendingWrites(db).then(() => { S.pendingDocs = 0; schedule(); }).catch(() => {});
+      }
     } catch (e) { console.warn(e); }
     schedule();
   });
 }
-async function maybeSetup() {
-  try { S.setup = await api('setup', undefined, { authed: false }); } catch (e) { S.setup = null; }
+// Before login: is this a fresh install (setup), and whose link is this?
+async function whoAmI() {
+  S.who = null; S.loginErr = '';
+  if (S.key) {
+    try { S.who = await api('login', { key: S.key }, { authed: false }); }
+    catch (e) { if (!e.offline) { S.loginErr = e.message; if (e.status === 404) { S.key = ''; lsSet('amanat4.key', null); } } else S.who = { name: '' }; }
+  }
+  if (!S.key) { try { S.setup = await api('setup', undefined, { authed: false }); } catch (e) { S.setup = null; } }
   schedule();
 }
 
 /* ---------- login & setup ---------- */
 async function doLogin() {
-  const code = ($('#pin-in')?.value || '');
+  const code = ($('#pin-in')?.value || '').trim();
   if (!code) return;
   S.loggingIn = true; S.loginErr = ''; schedule();
   try {
-    const { token } = await api('login', { profileId: S.loginPick, code }, { authed: false });
+    const { token } = await api('login', { key: S.key, code }, { authed: false });
     await signInWithCustomToken(auth, token);
     S.tab = 'photos'; S.show = null;
   } catch (e) { S.loginErr = e.offline ? 'No internet. The first login on a device needs internet.' : e.message; }
   S.loggingIn = false; schedule();
+}
+function useLink() {
+  const v = ($('#link-in')?.value || '').trim();
+  const m = /k=([A-Za-z0-9_-]{10,60})/.exec(v) || /^([A-Za-z0-9_-]{10,60})$/.exec(v);
+  if (!m) { S.loginErr = 'That does not look like an Amanat link.'; schedule(); return; }
+  S.key = m[1]; lsSet('amanat4.key', S.key); whoAmI();
 }
 async function doSetup() {
   const name = $('#su-name').value.trim(), code = $('#su-code').value, code2 = $('#su-code2').value, setupKey = $('#su-key').value;
   if (code !== code2) { S.loginErr = 'The two codes are not the same.'; schedule(); return; }
   S.loggingIn = true; S.loginErr = ''; schedule();
   try {
-    const profileId = (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'admin').slice(0, 20);
-    const { token } = await api('setup', { setupKey, profileId, name, code }, { authed: false });
+    const { token, pid, key } = await api('setup', { setupKey, name, code }, { authed: false });
+    S.key = key; lsSet('amanat4.key', key);
     await signInWithCustomToken(auth, token);
-    put('profiles/' + profileId, { name, role: 'admin', color: '#2D6FC7', job: 'Uploads and names photos, sends the parcels', perms: {}, disabled: false, at: tnow() });
-    toast('Amanat is set up. Add a flight, then add Tayyab bhai in Menu > Profiles.', { ms: 6000 });
+    put('people/' + pid, { name, role: 'dev', key, phone: '', city: '', note: '', disabled: false, at: tnow() });
+    showMyLink(key);
   } catch (e) { S.loginErr = e.message; }
   S.loggingIn = false; schedule();
 }
@@ -79,13 +102,18 @@ const ACT = {
   noop: () => {},
   closeSheet: () => closeSheet(),
   tab: (el) => { S.tab = el.dataset.v; lsSet('amanat3.tab', S.tab); window.scrollTo(0, 0); schedule(); },
-  pickFace: (el) => { S.loginPick = el.dataset.v; S.loginErr = ''; schedule(); setTimeout(() => $('#pin-in')?.focus(), 50); },
+  useLink: () => useLink(),
+  haveLink: () => { S.setup = null; schedule(); },
+  otherLink: () => { S.key = ''; S.who = null; lsSet('amanat4.key', null); whoAmI(); },
   login: () => doLogin(),
   setup: () => doSetup(),
   menu: () => openMenu(),
   switchFace: () => switchProfile(),
-  addProfile: () => openProfile(null),
-  editProfile: (el) => openProfile(el.dataset.id),
+  people: () => openPeople(),
+  exitView: () => exitViewAs(),
+  release: (el) => setRelease([el.dataset.id], el.dataset.on === '1'),
+  releaseSvc: (el) => { const ids = active().filter((g) => svcKey(g.service) === el.dataset.v && !g.released).map((g) => g.id); if (ids.length) setRelease(ids, true); },
+  releaseAll: () => { const ids = active().filter((g) => !g.released).map((g) => g.id); if (ids.length) setRelease(ids, true); },
   flights: () => openFlights(),
   createFlight: () => createFlight(),
   openFlight: (el) => { setFlight(el.dataset.id); closeSheet(); },
@@ -167,6 +195,7 @@ const typing = (el) => /^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName) || el?.isCo
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape') { if (layerCount()) { closeTop(); return; } if (S.sel.size) { S.sel.clear(); schedule(); } return; }
   if (ev.key === 'Enter' && ev.target.id === 'pin-in') { ev.preventDefault(); doLogin(); return; }
+  if (ev.key === 'Enter' && ev.target.id === 'link-in') { ev.preventDefault(); useLink(); return; }
   if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches?.('[data-tsel]')) { ev.preventDefault(); ev.target.click(); return; }
   if (typing(ev.target) || !S.me) return;
   if (viewerOpen() && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) { ev.preventDefault(); viewerNav(ev.key === 'ArrowLeft' ? -1 : 1); return; }
@@ -200,7 +229,7 @@ document.addEventListener('drop', (e) => {
   const begin = (x, y) => {
     if (!st || !can('group')) { st = null; return; } st.active = true; DRAG.active = true;
     st.ids = S.sel.has(st.id) ? [...S.sel] : [st.id]; const it = S.items.find((i) => i.id === st.id);
-    const g = document.createElement('div'); g.className = 'ghost'; g.innerHTML = `<img src="${it?.photos?.[0]?.t || ''}" alt="">${st.ids.length > 1 ? `<b>${st.ids.length}</b>` : ''}`; document.body.appendChild(g); st.ghost = g;
+    const g = document.createElement('div'); g.className = 'ghost'; g.innerHTML = `<img src="${safeImg(it?.photos?.[0]?.t || '')}" alt="">${st.ids.length > 1 ? `<b>${st.ids.length}</b>` : ''}`; document.body.appendChild(g); st.ghost = g;
     st.ids.forEach((id) => $(`.card[data-iid="${id}"]`)?.classList.add('lift')); try { navigator.vibrate?.(15); } catch (e) { /* ignore */ } move(x, y);
   };
   const move = (x, y) => {
