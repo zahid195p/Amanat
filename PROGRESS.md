@@ -27,3 +27,30 @@
 ## Decisions
 - Gemini model: GEMINI_MODEL env, default `gemini-flash-latest`, falls back to `gemini-2.5-flash`. Free-tier limits could not be verified from here (Google docs blocked); roughly 10-15 requests/min, 250-1500/day.
 - Firestore Spark limits: 1 GiB stored, 50k reads, 20k writes, 20k deletes per day.
+
+## Version 2 (started 2026-11-12)
+
+Goal: owner (Tayyab), dispatchers, passengers and clients each get a private link + code and see
+only their own part; contacts reach a device only after the owner releases them.
+
+### Step 1: done, on the test site https://amanat-test.pages.dev
+- Data lives under `apps/{space}/…`; `space` is `live` on amanat.fazol.skin / amanat-2oq.pages.dev and
+  `test` everywhere else (`src/env.js`). KV keys are prefixed the same way. Live still runs version 1
+  from Pages project `amanat`; the workflow now deploys only Pages project `amanat-test`.
+- Login: `/#k=<key>` + code (`/api/login`), no people list. `/api/people` creates people, codes, links,
+  turn off, view-as. First run: `/api/setup` (setup phrase) makes the developer.
+- Roles: dev, owner (everything), dispatcher (flights they are on; no delete/regroup/flight edits),
+  client and passenger (no database access; placeholder page until steps 2 and 3).
+- Receiver details (name, phones, address, raw message) are in `groupsPrivate/{id}`; `rel` lists the
+  dispatchers they are released to. `core.js` `upd/put/del('groups/…')` split the two documents.
+- Dispatcher queries use one `array-contains` clause (`dids` / `rel`) so no composite index is needed.
+- View as: second Firebase app signed in with a `viewAs` token; rules make it read-only.
+- Rules are published by `scripts/deploy-rules.mjs` in the workflow (v1 block unchanged).
+- `tests/e2e.mjs`: 64 checks, including direct database attempts by a dispatcher, a dispatcher not
+  on the flight, a client login and a view-as login.
+
+### Next
+- Step 2: passengers, bag counts, dispatcher airport view, timed contact release, receive check.
+- Step 3: client page (server-rendered through a function, no database access).
+- Step 4: slips with AI matching, expenses.
+- Switch live to version 2: migrate root collections into `apps/live`, deploy to project `amanat`.

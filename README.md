@@ -3,12 +3,13 @@
 Offline-first web app for flight items, parcel groups and courier sending.
 Installs to the Home Screen on iPhone and Android, and runs in any laptop browser.
 
-- **Live:** https://amanat.fazol.skin (and the Cloudflare address https://amanat-2oq.pages.dev)
+- **Live (version 1):** https://amanat.fazol.skin (and the Cloudflare address https://amanat-2oq.pages.dev)
+- **Test (version 2, separate test data):** https://amanat-test.pages.dev — see PROGRESS.md
 - **Stack:** Vite + vanilla JS PWA · Firebase Firestore (free Spark plan) with offline cache · Cloudflare Pages + Functions · Google Gemini (free tier)
 
 ## How it is deployed
 
-Every push to `main` or `claude/vibrant-lamport-73cbm9` runs `.github/workflows/deploy.yml`, which:
+Every push to `main` or `claude/vibrant-lamport-73cbm9` runs `.github/workflows/deploy.yml`. It now deploys the **test site only** (Pages project `amanat-test`) and publishes the database rules; the live site is left as it is. The original live deploy did this:
 1. builds the app,
 2. creates the Cloudflare Pages project `amanat` and the KV namespace `amanat` if missing,
 3. copies the GitHub secrets `FIREBASE_SERVICE_ACCOUNT` and `GEMINI_API_KEY` into Cloudflare's encrypted secrets,
