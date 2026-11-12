@@ -6,11 +6,11 @@ import {
   closeAll, choose, ask, pushLayer, closeTop, schedule, upd, put, del, w, D, saveLater, flushAll, logEv, newGroup, saveBook, lookupBook,
   moveItems, combine, deleteItems, setDone, setStep, setFlight, nextTmp, getDoc, getDocs, collection, query, where, writeBatch,
   increment, deleteField, db, STEPS, DEFAULT_WA, DEFAULT_TRACK, FREE_BYTES, setDoc, updateDoc, C, safeImg,
-  commitUndos, auth, signOut, unsubscribeAll, ROLE_LABEL, PRIVATE_FIELDS, landAtOf, RECV, setRecv, AUTO_CHOICES, isDispatcher, setFlightDispatchers, enterViewAs, SPACE,
+  commitUndos, auth, signOut, unsubscribeAll, ROLE_LABEL, PRIVATE_FIELDS, landAtOf, RECV, setRecv, AUTO_CHOICES, EXP_CATS, addExpense, isDispatcher, setFlightDispatchers, enterViewAs, SPACE,
 } from './core.js';
-import { FIELDS, SERVICES, CITIES, phoneKey, isMobile, waNumber, findPhones, localParse, fixUp } from './parse.js';
+import { FIELDS, SERVICES, CITIES, phoneKey, isMobile, waNumber, findPhones, localParse, fixUp, matchSlips } from './parse.js';
 import { fullPhoto, cachePhoto, compressOne, handleFiles } from './images.js';
-import { api, readText, readBulk, readImage, nameItems, aiAllowed } from './api.js';
+import { api, readText, readBulk, readImage, nameItems, aiAllowed, readSlips, readReceipt } from './api.js';
 import { ICON, telLinks, pendingBadge } from './views.js';
 
 const LIVE = new Set(); // layers re-rendered from snapshots (B16)
@@ -557,7 +557,7 @@ export async function deleteFlight(fid, resume) {
   try {
     await setDoc(D('flights/' + fid), { deleting: true }, { merge: true });
     let n = 0;
-    for (const col of ['photos', 'receipts', 'log', 'items', 'groupsPrivate', 'groups', 'tripsPrivate', 'trips']) await wipe(col, fid, (k) => { span.textContent = `Deleting ${col}… ${n + k}`; });
+    for (const col of ['photos', 'receipts', 'log', 'items', 'groupsPrivate', 'groups', 'tripsPrivate', 'trips', 'expenses']) await wipe(col, fid, (k) => { span.textContent = `Deleting ${col}… ${n + k}`; });
     await del('flights/' + fid);
     if (S.fid === fid) setFlight(S.flights.find((x) => x.id !== fid)?.id || null);
     t.remove(); toast('Flight deleted');
@@ -576,7 +576,7 @@ export async function archiveFlight(fid) {
     logEv('archived the flight', fid); t.remove(); toast('Flight archived');
   } catch (e) { t.remove(); toast('Archiving stopped: ' + (e.code || e.message)); }
 }
-const BACKUP_COLS = ['people', 'config', 'flights', 'items', 'groups', 'groupsPrivate', 'trips', 'tripsPrivate', 'log', 'book'];
+const BACKUP_COLS = ['people', 'config', 'flights', 'items', 'groups', 'groupsPrivate', 'trips', 'tripsPrivate', 'expenses', 'log', 'book'];
 export async function backup(withPhotos) {
   if (!navigator.onLine) { toast('Connect to the internet to make a full backup.'); return; }
   const t = toast('Making the backup…', { ms: 600000 });
@@ -772,4 +772,88 @@ export async function clientSlip(id) {
   const sh = sheet('Booking slip', '<div class="vimg"><img id="ph-img" alt="Booking slip"></div><p class="dim" id="sl-st">Loading…</p>', { cls: 'wide' });
   try { const r = await api('portal?slip=' + encodeURIComponent(id)); sh.querySelector('#ph-img').src = safeImg(r.d); sh.querySelector('#sl-st').textContent = ''; }
   catch (e) { const st = sh.querySelector('#sl-st'); if (st) st.textContent = e.offline ? 'No internet.' : e.message; }
+}
+
+/* =================== many booking slips at once =================== */
+export async function openSlips() {
+  if (!can('send') || S.me.viewAs) return;
+  const files = await pickFile('image/*,.heic,.heif', true); if (!files.length) return;
+  const sh = sheet('Booking slips', '<p class="status" id="sl-st">Preparing the photos…</p><div id="sl-list"></div>', { cls: 'wide' });
+  const st = sh.querySelector('#sl-st'); const slips = [];
+  for (const f of files.slice(0, 40)) {
+    try { slips.push({ id: rid(), full: await compressOne(f, 1400, 0.7), ai: await compressOne(f, 1100, 0.6), t: await compressOne(f, 240, 0.55), name: f.name }); }
+    catch (e) { toast(e.message, { ms: 5000 }); }
+    st.textContent = `Preparing the photos… ${slips.length} of ${files.length}`;
+  }
+  if (!slips.length) { st.textContent = 'No photo could be opened.'; return; }
+  st.textContent = aiAllowed() && navigator.onLine ? `Reading ${plural(slips.length, 'slip')} with AI…` : 'Choose the parcel for each slip.';
+  const r = await readSlips(slips.map((x) => ({ id: x.id, image: x.ai })));
+  if (!sh.isConnected) return;
+  for (const x of slips) x.read = r.rows.find((y) => y && y.id === x.id) || null;
+  const gs = S.groups;
+  const guess = matchSlips(slips.map((x) => x.read || {}), gs.filter((g) => !g.locked));
+  const got = slips.filter((x) => x.read && (x.read.name || x.read.tracking || x.read.phone)).length;
+  st.className = 'status' + (r.why ? ' err' : '');
+  st.textContent = r.why ? `AI could not read the slips (${r.why}). Choose the parcel for each one.` : `AI read ${got} of ${slips.length}. Check each one, then save.`;
+  const num = (v) => (Number(v) > 0 ? Number(v) : '');
+  sh.querySelector('#sl-list').innerHTML = slips.map((x, k) => { const d = x.read || {}; return `<div class="bk slip" data-k="${k}"><img class="rthumb" src="${safeImg(x.t)}" alt="Slip ${k + 1}"><div class="grow">
+    <div class="dim" style="font-size:13px;margin-bottom:4px">${esc([d.name, d.city, d.phone, d.service].filter(Boolean).join(' · ') || 'Nothing read from this slip')}</div>
+    <select data-f="gid" aria-label="Parcel for slip ${k + 1}"><option value="">No parcel (do not save)</option>${gs.map((g) => `<option value="${g.id}" ${guess[k] === g.id ? 'selected' : ''}>${esc(pLabel(g))} ${esc(g.locked ? '(receiver hidden)' : gTitle(g))}${g.city ? ', ' + esc(g.city) : ''}${g.receipt ? ' (has a slip)' : ''}</option>`).join('')}</select>
+    <div class="two"><input data-f="tracking" value="${esc(d.tracking || '')}" placeholder="Tracking number"><input data-f="charges" inputmode="numeric" value="${esc(num(d.charges))}" placeholder="Charges Rs"></div></div></div>`; }).join('')
+    + '<button class="btn primary wide" id="sl-save">Save</button>';
+  const btn = sh.querySelector('#sl-save');
+  const count = () => { const n = [...sh.querySelectorAll('[data-f=gid]')].filter((x) => x.value).length; btn.textContent = `Save ${plural(n, 'slip')}`; btn.disabled = !n; };
+  sh.addEventListener('change', count); count();
+  btn.onclick = async () => {
+    const rows = [...sh.querySelectorAll('.slip')].map((el) => ({ x: slips[Number(el.dataset.k)], gid: el.querySelector('[data-f=gid]').value, tracking: el.querySelector('[data-f=tracking]').value.trim(), charges: parseFloat(el.querySelector('[data-f=charges]').value) })).filter((r2) => r2.gid);
+    if (new Set(rows.map((r2) => r2.gid)).size < rows.length) { toast('Two slips have the same parcel. Each parcel takes one slip.'); return; }
+    const skipped = slips.length - rows.length;
+    if (skipped && !(await ask(`${plural(skipped, 'slip')} with no parcel will not be saved. Continue?`, 'Save the rest'))) return;
+    for (const { x, gid, tracking, charges } of rows) {
+      const g = groupById(gid); if (!g) continue; const pid = rid();
+      put('receipts/' + pid, { fid: S.fid, gid, d: x.full, at: now() }); cachePhoto(pid, x.full);
+      if (g.receipt?.p) del('receipts/' + g.receipt.p);
+      const patch = { receipt: { p: pid, t: x.t }, 'steps.booked': g.steps?.booked || { at: now(), by: S.me.uid } };
+      if (tracking) patch.tracking = tracking;
+      if (charges > 0) patch.charges = charges;
+      if (!g.weight && Number(x.read?.weight) > 0) patch.weight = Number(x.read.weight);
+      upd('groups/' + gid, patch);
+    }
+    logEv(`added ${plural(rows.length, 'booking slip')}`);
+    closeSheet(); toast(`${plural(rows.length, 'slip')} saved` + (isAdmin() ? '' : '. The owner checks them before clients see them.'));
+  };
+}
+
+/* =================== expenses =================== */
+export function openExpense() {
+  if (S.me.viewAs) return;
+  const sh = sheet('Add an expense', `
+  <div class="two"><label class="fld"><span>Amount Rs</span><input id="ex-amount" inputmode="numeric"></label><label class="fld"><span>What for</span><input id="ex-note" placeholder="Ride from the airport"></label></div>
+  <div class="fld"><span class="lab">Type</span><div class="chips">${EXP_CATS.map((c, k) => `<button class="chip ${k ? '' : 'on'}" data-cat="${c}">${c}</button>`).join('')}</div></div>
+  <div class="fld"><span class="lab">Receipt photo (optional)</span><div class="row" id="ex-ph"><button class="btn sm" id="ex-add">Add photo of the receipt</button></div></div>
+  <div class="status err" id="ex-err"></div><button class="btn primary wide" id="ex-save">Save expense</button>`);
+  let receipt = null;
+  sh.querySelectorAll('[data-cat]').forEach((b) => (b.onclick = () => sh.querySelectorAll('[data-cat]').forEach((x) => x.classList.toggle('on', x === b))));
+  sh.querySelector('#ex-add').onclick = async () => {
+    const [f] = await pickFile('image/*'); if (!f) return;
+    try {
+      receipt = { full: await compressOne(f, 1400, 0.7), t: await compressOne(f, 240, 0.55) };
+      sh.querySelector('#ex-ph').innerHTML = `<img class="rthumb" src="${safeImg(receipt.t)}" alt="Receipt"><span class="status" id="ex-ai"></span>`;
+      const am = sh.querySelector('#ex-amount'), nt = sh.querySelector('#ex-note');
+      if (!am.value && aiAllowed() && navigator.onLine) {
+        sh.querySelector('#ex-ai').textContent = 'Reading the amount…';
+        const r = await readReceipt(await compressOne(f, 1100, 0.6));
+        const ai = sh.querySelector('#ex-ai'); if (!ai) return;
+        if (r && Number(r.amount) > 0) { if (!am.value) am.value = r.amount; if (!nt.value && r.what) nt.value = r.what; ai.textContent = 'Filled in from the photo. Check it.'; } else ai.textContent = '';
+      }
+    } catch (e) { toast(e.message); }
+  };
+  sh.querySelector('#ex-save').onclick = () => {
+    const amount = parseFloat(String(sh.querySelector('#ex-amount').value).replace(/,/g, ''));
+    if (!(amount > 0)) { sh.querySelector('#ex-err').textContent = 'Enter the amount.'; return; }
+    let rc = null;
+    if (receipt) { const pid = rid(); put('receipts/' + pid, { fid: S.fid, d: receipt.full, at: now() }); cachePhoto(pid, receipt.full); rc = { p: pid, t: receipt.t }; }
+    addExpense({ amount, cat: sh.querySelector('[data-cat].on')?.dataset.cat || 'Other', note: sh.querySelector('#ex-note').value.trim(), receipt: rc });
+    closeSheet(); toast('Expense saved');
+  };
 }

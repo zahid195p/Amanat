@@ -7,7 +7,7 @@ import '@fontsource/barlow-condensed/700.css';
 import './style.css';
 import {
   S, $, $$, now, plural, isAdmin, can, groupById, active, toSend, ungrouped, visItems, toast, closeSheet, closeTop, layerCount, ask, choose,
-  schedule, setRender, DRAG, initFirebase, auth, onAuthStateChanged, signInWithCustomToken, subscribeBase, SPACE, ROLE_LABEL, isStaff, setRelease, exitViewAs, addTrip, updTrip, setTripRelease, delTrip, gotBag, saveLanding, setTickApi, setOnMe, upd, setRecv, tick,
+  schedule, setRender, DRAG, initFirebase, auth, onAuthStateChanged, signInWithCustomToken, subscribeBase, SPACE, ROLE_LABEL, isStaff, setRelease, exitViewAs, addTrip, updTrip, setTripRelease, delTrip, gotBag, saveLanding, setTickApi, setOnMe, delExpense, upd, setRecv, tick,
   unsubscribeAll, setFlight, saveLater, moveItems, combine, deleteItems, setDone, svcKey, lsSet, waitForPendingWrites, db, numberItems, put, now as tnow,
 } from './core.js';
 import { render, shownItems } from './views.js';
@@ -15,7 +15,7 @@ import { handleFiles, retryUpload, dropUpload, clearUploads } from './images.js'
 import { api } from './api.js';
 import {
   openGroupSheet, openPickGroup, openViewer, viewerOpen, viewerNav, openCounter, openFlights, createFlight, downloadMD, downloadCSV,
-  deleteFlight, archiveFlight, openActivity, backup, restore, openMenu, openPeople, showMyLink, switchProfile, clientEdit, clientSlip, openBulk, readShot, aiName, aiCheck,
+  deleteFlight, archiveFlight, openActivity, backup, restore, openMenu, openPeople, showMyLink, switchProfile, clientEdit, clientSlip, openSlips, openExpense, openPhoto, openBulk, readShot, aiName, aiCheck,
   msgReceiver, copy,
 } from './sheets.js';
 
@@ -131,6 +131,11 @@ const ACT = {
   gotBag: (el) => gotBag(el.dataset.id, el.dataset.k, Number(el.dataset.d)),
   selRecv: (el) => setRecv(sel(), el.dataset.v),
   portalReload: () => loadPortal(),
+  slips: () => openSlips(),
+  slipsOkAll: () => { const gs = S.groups.filter((g) => g.cid && (g.receipt || g.tracking) && !g.slipOk); gs.forEach((g) => upd('groups/' + g.id, { slipOk: true })); toast(`${plural(gs.length, 'slip')} now visible to clients`); },
+  addExpense: () => openExpense(),
+  delExpense: async (el) => { if (await ask('Delete this expense?')) delExpense(el.dataset.id); },
+  expPhoto: (el) => openPhoto('Receipt', el.dataset.id, 'receipts'),
   clientEdit: (el) => { const p = S.portal?.parcels?.find((x) => x.id === el.dataset.id); if (p) clientEdit(p, loadPortal); },
   clientSlip: (el) => clientSlip(el.dataset.id),
   clientShow: (el) => { const g = groupById(el.dataset.id); if (g && isAdmin()) { upd('groups/' + g.id, { [el.dataset.k]: el.dataset.on === '1' }); toast(el.dataset.on === '1' ? 'Now visible to the client' : 'Hidden from the client'); } },

@@ -39,7 +39,7 @@ export const S = {
   ready: false, configured: !!firebaseConfig.projectId, fatal: null,
   user: undefined, me: null, people: [], setup: null, real: null,
   cfg: {}, flights: [], flightsLoaded: false, flightsFromCache: true,
-  fid: null, items: [], groups: [], trips: [], itemsLoaded: false, portal: null,
+  fid: null, items: [], groups: [], trips: [], expenses: [], itemsLoaded: false, portal: null,
   tab: 'photos', show: null, sel: new Set(), lastSel: null, q: '',
   gf: { city: '', service: '', status: 'open', sort: 'parcel' },
   uq: [], gridLimit: 120, hidden: new Set(), inflight: 0, pendingDocs: 0, online: navigator.onLine,
@@ -359,7 +359,7 @@ export function setFlight(fid) {
   flushAll(); commitUndos(); // B12
   S.fid = fid; S.subbed = fid; if (!S.me?.viewAs) lsSet('amanat3.fid', fid); S.sel.clear(); S.show = null; S.gridLimit = 120;
   unsubF.forEach((u) => u()); unsubF = []; S.items = []; S.groups = []; S.itemsLoaded = false;
-  gPub = []; gPriv = new Map(); tPub = []; tPriv = new Map(); S.trips = [];
+  gPub = []; gPriv = new Map(); tPub = []; tPriv = new Map(); S.trips = []; S.expenses = [];
   if (fid) {
     // A dispatcher's queries must match the rules exactly ("only what I am on"), so they ask
     // for everything of theirs and the flight is picked out here.
@@ -374,6 +374,7 @@ export function setFlight(fid) {
     }, dbErr));
     unsubF.push(onSnapshot(q1('groups'), { includeMetadataChanges: true }, (q) => { gPub = ofFlight(q); mergeGroups(); numberDocs('groups'); }, dbErr));
     unsubF.push(onSnapshot(q1('groupsPrivate', 'rel'), { includeMetadataChanges: true }, (q) => { gPriv = new Map(ofFlight(q).map((d) => [d.id, d])); mergeGroups(); }, dbErr));
+    unsubF.push(onSnapshot(boss ? query(C('expenses'), where('fid', '==', fid)) : query(C('expenses'), where('by', '==', S.me.uid)), { includeMetadataChanges: true }, (q) => { S.expenses = ofFlight(q).sort((a, b) => (b.at || 0) - (a.at || 0)); schedule(); }, dbErr));
     unsubF.push(onSnapshot(q1('trips'), (q) => { tPub = ofFlight(q); mergeTrips(); }, dbErr));
     unsubF.push(onSnapshot(q1('tripsPrivate', 'rel'), (q) => { tPriv = new Map(ofFlight(q).map((d) => [d.id, d])); mergeTrips(); }, dbErr));
   }
@@ -620,6 +621,19 @@ export async function tick() {
 let tickApi = async () => {};
 export const setTickApi = (fn) => (tickApi = fn);
 setInterval(() => { tick(); schedule(); }, 60000);
+
+/* ---------- expenses ---------- */
+export const EXP_CATS = ['Ride', 'Packing', 'Courier', 'Food', 'Other'];
+export function addExpense(e) {
+  if (!S.fid || viewing()) return;
+  put('expenses/' + rid(), { fid: S.fid, by: S.me.uid, byName: S.me.name || '', at: now(), amount: e.amount, cat: e.cat, note: e.note || '', ...(e.receipt ? { receipt: e.receipt } : {}) });
+  logEv(`added an expense: ${e.cat} Rs ${e.amount}`);
+}
+export function delExpense(id) {
+  const e = S.expenses.find((x) => x.id === id); if (!e) return;
+  if (e.receipt?.p) del('receipts/' + e.receipt.p);
+  del('expenses/' + id);
+}
 
 /* ---------- receive check: did each item really arrive? ---------- */
 export const RECV = { ok: 'Received', missing: 'Missing', damaged: 'Damaged' };

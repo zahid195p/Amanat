@@ -348,3 +348,8 @@ a.btn{text-decoration:none}
 .slipb{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:2px;min-height:44px}
 .slipb img{width:64px;height:64px;object-fit:cover;border-radius:6px}
 .rel.cl{color:var(--info)}
+
+/* step 4: slips and expenses */
+.bk.slip{align-items:flex-start}
+.bk.slip select{min-height:40px;padding:6px 8px;font-size:15px;margin-bottom:4px}
+.rthumb.sm{width:44px;height:44px}

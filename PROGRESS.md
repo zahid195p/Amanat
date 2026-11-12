@@ -70,6 +70,14 @@ only their own part; contacts reach a device only after the owner releases them.
 - The server batches reads (`fsMany`, `fsWhereIn`) to stay under the per-request limit.
 - `tests/e2e.mjs`: 97 checks.
 
+### Step 4: done, on the test site
+- "Add booking slips" (By service): many photos at once; `/api/ai` task `slips` reads receiver, phone,
+  city, tracking, charges; `matchSlips` in `src/parse.js` pairs each with a parcel the user can see
+  (phone/tracking exact, else name + city + courier). Review screen, then save: slip, tracking, charges,
+  "Booked". Works by hand when AI is off. NOT yet tried against real Gemini with real slips.
+- Expenses (`expenses`): amount, type, note, optional receipt photo (AI task `receipt` reads the amount).
+  Owner sees all with totals incl. courier charges; a dispatcher sees only their own.
+- `tests/e2e.mjs`: 104 checks.
+
 ### Next
-- Step 4: slips with AI matching, expenses.
 - Switch live to version 2: migrate root collections into `apps/live`, deploy to project `amanat`.

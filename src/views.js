@@ -157,12 +157,23 @@ function vFlight() {
     if (boss) c += `<div class="row" style="margin-top:8px"><button class="btn sm danger" data-act="delTrip" data-id="${t.id}">Remove from flight</button></div>`;
     return c + '</div>';
   }).join('');
+  h += expensesBox(boss);
   if (boss) {
     const free = S.people.filter((p) => p.role === 'passenger' && !p.disabled && !ts.some((t) => t.pid === p.id));
     h += `<div class="box" data-key="fl-add"><b>Add a passenger to this flight</b>${free.length ? `<div class="row" style="margin-top:8px"><select id="fl-pass" class="grow" style="width:auto">${free.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select><button class="btn primary" data-act="addTrip">Add</button></div>` : '<p class="dim" style="margin-bottom:0">Add the person first in Menu, People and links, with the role Passenger.</p>'}
     <p class="dim" style="font-size:13px;margin-bottom:0">Dispatchers on this flight see how many passengers and bags are coming. They see who the passenger is only after the release. Choose the dispatchers in Flights (tap the flight name at the top).</p></div>`;
   }
   return h;
+}
+
+function expensesBox(boss) {
+  const es = S.expenses; const rs = (n) => 'Rs ' + Math.round(n).toLocaleString('en-PK');
+  const total = es.reduce((a, e) => a + (Number(e.amount) || 0), 0);
+  const courier = boss ? S.groups.reduce((a, g) => a + (Number(g.charges) || 0), 0) : 0;
+  const cats = {}; es.forEach((e) => (cats[e.cat || 'Other'] = (cats[e.cat || 'Other'] || 0) + (Number(e.amount) || 0)));
+  return `<div class="box" data-key="fl-exp"><div class="row"><b class="grow">${boss ? 'Expenses' : 'My expenses'} · ${rs(total)}</b><button class="btn sm primary" data-act="addExpense">Add expense</button></div>
+  ${boss && (courier || total) ? `<div class="dim" style="font-size:14px;margin-top:4px">${Object.entries(cats).map(([k, v]) => `${esc(k)} ${rs(v)}`).join(' · ')}${courier ? `${total ? ' · ' : ''}Courier charges on parcels ${rs(courier)}` : ''}. <b>All together ${rs(total + courier)}</b></div>` : ''}
+  ${es.map((e) => `<div class="prow" data-key="ex-${e.id}">${e.receipt?.t ? `<img class="rthumb sm" src="${safeImg(e.receipt.t)}" alt="Receipt" data-act="expPhoto" data-id="${esc(e.receipt.p)}">` : ''}<span class="grow"><b>${rs(Number(e.amount) || 0)}</b> ${esc(e.cat || '')}${e.note ? ' · ' + esc(e.note) : ''}${pendingBadge(e._pending)}<br><span class="dim" style="font-size:13px">${boss && e.byName ? esc(e.byName) + ' · ' : ''}${esc(fmtDate(new Date((e.at || 0) + 5 * 3600000).toISOString().slice(0, 10)))}</span></span>${boss || e.by === S.me.uid ? `<button class="btn sm danger" data-act="delExpense" data-id="${e.id}" aria-label="Delete expense">${ICON.trash}</button>` : ''}</div>`).join('') || '<p class="dim" style="margin-bottom:0">Rides, packing and other costs for this flight. Courier charges are entered on each parcel.</p>'}</div>`;
 }
 
 /* ---------- the passenger's own page ---------- */
@@ -361,6 +372,8 @@ function vService() {
   if (un.length) h += `<div class="note bad"><span>${plural(un.length, 'item')} not in any group. They would be left behind.</span><button class="btn sm" data-act="showUn">Show them</button></div>`;
   const bad = active().filter((g) => missing(g).length);
   if (bad.length) h += `<div class="note bad"><span>${plural(bad.length, 'group')} missing details.</span><button class="btn sm" data-act="showMissing">Show them</button></div>`;
+  const toShow = isAdmin() && !S.cfg.slipAuto ? S.groups.filter((g) => g.cid && (g.receipt || g.tracking) && !g.slipOk) : [];
+  if (S.groups.length && (can('send') || toShow.length)) h += `<div class="row" style="margin-bottom:10px">${can('send') ? '<button class="btn" data-act="slips">Add booking slips</button>' : ''}${toShow.length ? `<button class="btn" data-act="slipsOkAll">Show ${plural(toShow.length, 'slip')} to clients</button>` : ''}</div>`;
   if (S.groups.length > 6) h += searchBox('Search name, phone, city, tracking');
   if (active().length) h += '<p class="dim hint">Double-tap any parcel to show it big.</p>';
   if (S.groups.length && !active().length) h += '<div class="note"><span>Every parcel on this flight is marked sent.</span></div>';

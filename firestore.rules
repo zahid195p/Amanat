@@ -131,6 +131,13 @@ service cloud.firestore {
         allow read: if boss() || (disp() && pid() in resource.data.rel);
         allow write: if bossW();
       }
+      // Money spent on a flight (rides, packing…). A dispatcher sees and edits only their own.
+      match /expenses/{id} {
+        allow read: if boss() || (disp() && resource.data.by == pid());
+        allow create: if bossW() || (dispW() && request.resource.data.by == pid() && onFlight(request.resource.data.fid));
+        allow update: if bossW() || (dispW() && resource.data.by == pid() && diff().hasOnly(['amount', 'cat', 'note', 'receipt']));
+        allow delete: if bossW() || (dispW() && resource.data.by == pid());
+      }
       match /log/{id} {
         allow read: if boss();
         allow create: if (boss() || disp()) && writer();

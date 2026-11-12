@@ -9,7 +9,7 @@ import { PARSE_PROMPT, SERVICES } from '../../src/parse.js';
 
 // Fast model first (answers in ~0.5-2 s); the bigger flash model is often overloaded and slow.
 const FALLBACK_MODELS = ['gemini-flash-lite-latest', 'gemini-flash-latest'];
-const TIMEOUT_MS = { parse: 12000, bulk: 25000, image: 20000, name: 20000 };
+const TIMEOUT_MS = { parse: 12000, bulk: 25000, image: 20000, name: 20000, slips: 25000 };
 const ADDR = {
   type: 'OBJECT',
   properties: {
@@ -30,6 +30,22 @@ Rules for one parcel:
 const IMAGE_PROMPT = `The image is a screenshot of a chat (WhatsApp or similar) or a photo of a written note with delivery details. Read the text in it (English, Roman Urdu or Urdu) and return one entry per parcel you find, following these rules:
 `;
 const NAME_PROMPT = `Each image is a photo of one item that arrived in a shipment. For every image give a short plain English name of 2 to 5 words that a courier clerk would understand, e.g. "black leather shoes", "kids pink jacket", "steel water bottle". Mention the colour when clear. No brand guesses, no full sentences. Return one entry per image with the id given before it.`;
+
+const SLIP = {
+  type: 'OBJECT',
+  properties: { id: { type: 'STRING' }, name: { type: 'STRING' }, phone: { type: 'STRING' }, city: { type: 'STRING' }, tracking: { type: 'STRING' }, service: { type: 'STRING' }, charges: { type: 'NUMBER' }, weight: { type: 'NUMBER' } },
+  required: ['id', 'name', 'phone', 'city', 'tracking', 'service', 'charges', 'weight'],
+};
+const SLIP_PROMPT = `Each image is a photo of a courier or bus-cargo booking slip from Pakistan (TCS, Leopards, Daewoo FastEx, Faisal Movers, cargo and similar). It may be printed or handwritten, in English or Urdu. For every image return one entry with the id given before it:
+- name: the RECEIVER / consignee name (the person the parcel is going TO, not the sender or shipper). "" if not readable.
+- phone: the receiver's phone number exactly as written. "" if none.
+- city: the destination city. "" if none.
+- tracking: the tracking / consignment / CN / booking / bilty number exactly as printed. "" if none.
+- service: one of ${SERVICES.join(', ')}, from the logo or heading. "" if unsure.
+- charges: the total amount paid in rupees as a number, 0 if not shown.
+- weight: the weight in kg as a number, 0 if not shown.
+Never guess: leave a field "" or 0 when it is not clearly on the slip.`;
+const RECEIPT_PROMPT = 'The image is a receipt or a screenshot of a payment (ride app, courier, shop, fuel, food) from Pakistan. Return amount: the total paid in rupees as a number (0 if not readable), and what: 2 to 5 plain English words saying what it was for, e.g. "InDrive ride airport".';
 
 function dataUrlPart(d) {
   const m = /^data:([^;]+);base64,(.+)$/.exec(String(d || ''));
@@ -91,6 +107,16 @@ export async function onRequestPost({ request, env }) {
     const parts = [{ text: NAME_PROMPT }];
     for (const it of imgs) { const p = dataUrlPart(it.image); if (p) parts.push({ text: 'id: ' + String(it.id).slice(0, 40) }, p); }
     out = await gemini(env, parts, { type: 'ARRAY', items: { type: 'OBJECT', properties: { id: { type: 'STRING' }, name: { type: 'STRING' } }, required: ['id', 'name'] } }, TIMEOUT_MS.name);
+  } else if (b.task === 'slips') {
+    const imgs = Array.isArray(b.images) ? b.images.slice(0, 8) : [];
+    if (!imgs.length) return fail(400, 'No images');
+    const parts = [{ text: SLIP_PROMPT }];
+    for (const it of imgs) { const p = dataUrlPart(it.image); if (p) parts.push({ text: 'id: ' + String(it.id).slice(0, 40) }, p); }
+    out = await gemini(env, parts, { type: 'ARRAY', items: SLIP }, TIMEOUT_MS.slips);
+  } else if (b.task === 'receipt') {
+    const img = dataUrlPart(b.image);
+    if (!img) return fail(400, 'No image');
+    out = await gemini(env, [{ text: RECEIPT_PROMPT }, img], { type: 'OBJECT', properties: { amount: { type: 'NUMBER' }, what: { type: 'STRING' } }, required: ['amount', 'what'] }, TIMEOUT_MS.image);
   } else return fail(400, 'Unknown task');
   if (out.error) return fail(out.status || 502, out.error, out.detail ? { detail: out.detail } : {});
   return json({ result: out.data, model: out.model });

@@ -67,3 +67,21 @@ export async function nameItems(items) {
     return (Array.isArray(result) ? result : []).map((x) => ({ ...x, id: String(x.id || '').replace(/^id:\s*/i, '').trim() }));
   } catch (e) { throw new Error('AI naming failed: ' + whyText(e) + '.'); }
 }
+
+// Booking slips: read receiver, tracking number and charges from each photo. Returns [] when
+// AI cannot run, so the slips can still be matched by hand.
+export async function readSlips(list) {
+  if (!aiAllowed() || !navigator.onLine) return { rows: [], why: aiAllowed() ? 'offline' : 'AI is turned off' };
+  const rows = [];
+  try {
+    for (let k = 0; k < list.length; k += 6) {
+      const { result } = await api('ai', { task: 'slips', images: list.slice(k, k + 6) });
+      rows.push(...(Array.isArray(result) ? result : []));
+    }
+    return { rows };
+  } catch (e) { console.warn(e); return { rows, why: whyText(e) }; }
+}
+export async function readReceipt(image) {
+  if (!aiAllowed() || !navigator.onLine) return null;
+  try { const { result } = await api('ai', { task: 'receipt', image }); return result && typeof result === 'object' ? result : null; } catch (e) { return null; }
+}

@@ -257,6 +257,27 @@ await login(k2, cl2.key, cl2.pin);
 ok(await until(k2, () => /no parcels yet/.test(document.body.innerText), null, 15000), 'a different client sees none of this');
 await K2.close();
 
+/* ---------- 6d. many slips at once, and expenses ---------- */
+const [fc2] = await Promise.all([b.waitForEvent('filechooser'), b.click('[data-act=slips]')]);
+await fc2.setFiles([`${IMG}/p5.jpg`, `${IMG}/p6.jpg`]);
+ok(await until(b, () => document.querySelectorAll('.bk.slip').length === 2 && /Choose the parcel|could not read/i.test(document.querySelector('#sl-st')?.textContent || ''), null, 30000), 'two slips load; without AI the dispatcher picks the parcel by hand');
+ok(await b.evaluate(() => /receiver hidden/.test(document.querySelector('.bk.slip select').innerText) && !/Qasim/.test(document.querySelector('.bk.slip select').innerText)), 'the parcel list in the slip screen still hides unreleased receivers');
+await b.selectOption('.bk.slip:nth-child(1) [data-f=gid]', ids.groups[1]);
+await b.fill('.bk.slip:nth-child(1) [data-f=tracking]', 'DW777'); await b.fill('.bk.slip:nth-child(1) [data-f=charges]', '450');
+await b.click('#sl-save'); await b.click('[data-ch="1"]');
+ok(await until(o, () => /DW777/.test(document.body.innerText) && /Rs 450/.test(document.body.innerText) && /Booked/.test(document.querySelector('[data-key="sec-Daewoo"]')?.innerText || ''), null, 20000), 'slip saved on the chosen parcel: owner sees tracking, charges and "Booked"');
+await b.click('[data-act=tab][data-v=flight]'); await b.click('[data-act=addExpense]');
+await b.fill('#ex-amount', '1200'); await b.fill('#ex-note', 'Airport ride'); await b.click('#ex-save');
+await o.click('[data-act=tab][data-v=flight]');
+ok(await until(o, () => /Airport ride/.test(document.body.innerText) && /Bilal/.test(document.querySelector('[data-key="fl-exp"]').innerText) && /All together Rs 1,650/.test(document.body.innerText), null, 15000), 'dispatcher adds an expense; owner sees it with the total (1,200 + 450 courier)');
+await o.click('[data-act=addExpense]'); await o.fill('#ex-amount', '300'); await o.fill('#ex-note', 'Tape and boxes'); await o.click('[data-cat=Packing]'); await o.click('#ex-save');
+ok(await until(o, () => /Tape and boxes/.test(document.body.innerText) && /All together Rs 1,950/.test(document.body.innerText), null, 15000), 'owner adds his own expense');
+await wait(1500);
+ok(await b.evaluate(() => /My expenses · Rs 1,200/.test(document.body.innerText) && !/Tape and boxes/.test(document.body.innerText)), 'dispatcher sees only his own expenses');
+const ed = await b.evaluate(async () => await window.__t.list('expenses'));
+ok(ed === 'permission-denied', 'going around the app: the full expense list is refused to a dispatcher');
+await o.click('[data-act=tab][data-v=service]'); await b.click('[data-act=tab][data-v=service]');
+
 /* ---------- 7. view as ---------- */
 await a.reload();
 ok(await until(a, () => /PK 853/.test(document.querySelector('#hdr').innerText), null, 15000), 'developer sees the flight the owner made');

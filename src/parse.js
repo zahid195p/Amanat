@@ -99,3 +99,28 @@ Example answer:
 Reply with only one JSON object with exactly these keys: name, phone, phone2, address, city, service, note.
 Message:
 """`;
+
+// Which parcel does a booking slip belong to? Phone or tracking number decide it outright;
+// otherwise the receiver's name, city and courier are compared. Each parcel gets one slip.
+const words = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9؀-ۿ ]+/g, ' ').split(/\s+/).filter((w) => w.length > 1 && !['mr', 'muhammad', 'mohammad', 'm', 'sb', 'sahib', 'bhai'].includes(w));
+export function slipScore(slip, g) {
+  const k = phoneKey(slip.phone);
+  if (k && [g.phone, ...String(g.phone2 || '').split(',')].some((p) => phoneKey(p) === k)) return 100;
+  const tr = String(slip.tracking || '').replace(/\W/g, '').toLowerCase();
+  if (tr.length >= 5 && tr === String(g.tracking || '').replace(/\W/g, '').toLowerCase()) return 100;
+  const a = words(slip.name), b = words(g.name);
+  let score = 0;
+  if (a.length && b.length) score += Math.round((a.filter((w) => b.includes(w)).length / Math.min(a.length, b.length)) * 60);
+  if (slip.city && g.city && words(slip.city).join(' ') === words(g.city).join(' ')) score += 25;
+  if (slip.service && String(g.service || '').toLowerCase().includes(String(slip.service).toLowerCase())) score += 10;
+  if (g.receipt) score -= 15;
+  return score;
+}
+export function matchSlips(slips, groups) {
+  const pairs = [];
+  slips.forEach((s, i) => groups.forEach((g) => { const sc = slipScore(s, g); if (sc >= 60) pairs.push([sc, i, g.id]); }));
+  pairs.sort((x, y) => y[0] - x[0]);
+  const out = new Map(), used = new Set();
+  for (const [, i, gid] of pairs) if (!out.has(i) && !used.has(gid)) { out.set(i, gid); used.add(gid); }
+  return slips.map((_, i) => out.get(i) || '');
+}
