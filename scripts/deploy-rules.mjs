@@ -21,3 +21,7 @@ const rs = await api('POST', '/rulesets', { source: { files: [{ name: 'firestore
 const name = `projects/${sa.project_id}/releases/cloud.firestore`;
 await api('PATCH', '/releases/cloud.firestore', { release: { name, rulesetName: rs.name } });
 console.log('Rules published:', rs.name.split('/').pop());
+// The server also reads the database with this account (passenger pages, timed release): check it can.
+const fr = await fetch(`https://firestore.googleapis.com/v1/projects/${sa.project_id}/databases/(default)/documents/apps/test/config/main`, { headers: { authorization: 'Bearer ' + tok } });
+console.log('Server database access:', fr.status === 200 || fr.status === 404 ? 'ok' : 'FAILED ' + fr.status);
+if (fr.status !== 200 && fr.status !== 404) process.exit(1);

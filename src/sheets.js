@@ -6,7 +6,7 @@ import {
   closeAll, choose, ask, pushLayer, closeTop, schedule, upd, put, del, w, D, saveLater, flushAll, logEv, newGroup, saveBook, lookupBook,
   moveItems, combine, deleteItems, setDone, setStep, setFlight, nextTmp, getDoc, getDocs, collection, query, where, writeBatch,
   increment, deleteField, db, STEPS, DEFAULT_WA, DEFAULT_TRACK, FREE_BYTES, setDoc, updateDoc, C, safeImg,
-  commitUndos, auth, signOut, unsubscribeAll, ROLE_LABEL, PRIVATE_FIELDS, isDispatcher, setFlightDispatchers, enterViewAs, SPACE,
+  commitUndos, auth, signOut, unsubscribeAll, ROLE_LABEL, PRIVATE_FIELDS, landAtOf, RECV, setRecv, AUTO_CHOICES, isDispatcher, setFlightDispatchers, enterViewAs, SPACE,
 } from './core.js';
 import { FIELDS, SERVICES, CITIES, phoneKey, isMobile, waNumber, findPhones, localParse, fixUp } from './parse.js';
 import { fullPhoto, cachePhoto, compressOne, handleFiles } from './images.js';
@@ -258,6 +258,7 @@ export function openViewer(id, order) {
  <div class="vnav"><button class="btn sm" data-nav="-1" ${idx <= 0 ? 'disabled' : ''}>Previous</button><b>${idx + 1} of ${st.order.length}</b><button class="btn sm" data-nav="1" ${idx < 0 || idx >= st.order.length - 1 ? 'disabled' : ''}>Next</button></div>
  ${can('name') ? `<div class="row" style="flex-wrap:nowrap;margin-bottom:10px"><input id="vw-name" class="grow" value="${esc(it.name || '')}" placeholder="Name, e.g. small grey sneakers"><input id="vw-qty" style="width:80px" inputmode="numeric" value="${esc(it.qty ?? '')}" placeholder="Qty"></div>` : `<p style="font-weight:700;font-size:18px">${esc(itemLabel(it))}</p>`}
  <div class="fld"><span class="lab">Group</span><div class="gpick">${can('group') ? `<button data-vg="" class="${!groupById(it.groupId) ? 'on' : ''}">Not in a group</button>${S.groups.filter((g) => !g.done || g.id === it.groupId).map((g) => `<button data-vg="${g.id}" class="${it.groupId === g.id ? 'on' : ''}" style="--g:${gColor(g)}"><i></i>${esc(gLabel(g))}</button>`).join('')}<button data-vg="__new">+ New group</button>` : esc(gLabel(groupById(it.groupId)) || 'Not in a group')}</div></div>
+ ${can('send') ? `<div class="fld"><span class="lab">Did it arrive?</span><div class="seg">${Object.entries(RECV).map(([k, l]) => `<button data-recv="${k}" class="${it.recv === k ? 'on' : ''}">${l}</button>`).join('')}<button data-recv="" class="${it.recv ? '' : 'on'}">Not checked</button></div></div>` : ''}
  <div class="row">${can('upload') && ph.length > 1 ? '<button class="btn sm" id="vw-split">Make this photo its own item</button>' : ''}${isAdmin() ? `<button class="btn sm danger" id="vw-delp">${ph.length > 1 ? 'Delete this photo' : 'Delete this item'}</button>` : ''}${pendingBadge(it._pending)}</div>`;
     morph(box, html);
     if (cur && !archived && st.loaded?.[0] !== cur.p) {
@@ -267,9 +268,10 @@ export function openViewer(id, order) {
   }
   LIVE.add(draw); draw();
   box.addEventListener('click', async (ev) => {
-    const t = ev.target.closest('[data-k],[data-nav],[data-vg],#vw-split,#vw-delp'); if (!t) return;
+    const t = ev.target.closest('[data-k],[data-nav],[data-vg],[data-recv],#vw-split,#vw-delp'); if (!t) return;
     const it = S.items.find((i) => i.id === st.id); if (!it) return; const ph = it.photos || []; const cur = ph[st.ph];
     if (t.dataset.k) { st.ph = Number(t.dataset.k); resetZoom(); draw(); }
+    else if (t.dataset.recv !== undefined) setRecv([it.id], t.dataset.recv);
     else if (t.dataset.nav) nav(Number(t.dataset.nav));
     else if (t.dataset.vg !== undefined) { if (t.dataset.vg === '__new') { closeSheet(); openGroupSheet(null, [it.id]); return; } moveItems([it.id], t.dataset.vg, true); }
     else if (t.id === 'vw-split') {
@@ -445,7 +447,7 @@ export async function aiName(ids) {
 /* =================== flights =================== */
 export function openFlights() {
   const used = S.flights.reduce((s, f) => s + (f.bytes || 0), 0); const pct = Math.min(100, Math.round((used / FREE_BYTES) * 100));
-  const body = `${can('flights') ? `<div class="box"><div class="two"><label class="fld"><span>Flight</span><input id="nf-label" placeholder="PK 853"></label><label class="fld"><span>Date</span><input id="nf-date" type="date" value="${todayISO()}"></label></div><button class="btn primary wide" data-act="createFlight">Add flight</button></div>` : ''}
+  const body = `${can('flights') ? `<div class="box"><div class="two"><label class="fld"><span>Flight</span><input id="nf-label" placeholder="PK 853"></label><label class="fld"><span>Date</span><input id="nf-date" type="date" value="${todayISO()}"></label></div><label class="fld"><span>Landing time, Pakistan time (optional)</span><input id="nf-time" type="time"></label><button class="btn primary wide" data-act="createFlight">Add flight</button></div>` : ''}
  <div class="meter"><div class="row"><span class="grow"><b>Storage</b> ${fmtBytes(used)} of ${fmtBytes(FREE_BYTES)} free</span><span class="dim">${pct}%</span></div><div class="progress"><i style="width:${pct}%;${pct > 80 ? 'background:var(--stop)' : ''}"></i></div><div class="dim" style="font-size:13px">Archive or delete old flights to free space. Archiving keeps names, groups and small photos.</div></div>
  ${S.flights.map((f) => `<div class="gcard" style="--g:${f.id === S.fid ? 'var(--sign)' : 'var(--line)'}"><div class="gc-top"><span class="gc-name">${esc(f.label || 'Flight')}</span>${f.archived ? '<span class="svc alt">Archived</span>' : ''}${f.deleting ? '<span class="svc none">Deleting</span>' : ''}<span class="dim">${esc(fmtDate(f.date))}</span></div><div class="dim" style="font-size:13px">${fmtBytes(f.bytes || 0)}</div>${dispatcherChips(f)}<div class="row" style="margin-top:8px">${f.id === S.fid ? '<span class="status grow">Open now</span>' : `<button class="btn sm primary grow" data-act="openFlight" data-id="${f.id}">Open</button>`}${isAdmin() ? `<button class="btn sm" data-act="activity" data-id="${f.id}">Activity</button>` : ''}${can('export') ? `<button class="btn sm" data-act="mdFlight" data-id="${f.id}">Summary</button><button class="btn sm" data-act="csvFlight" data-id="${f.id}">Excel (CSV)</button>` : ''}${isAdmin() && !f.archived ? `<button class="btn sm" data-act="archiveFlight" data-id="${f.id}">Archive</button>` : ''}${isAdmin() ? `<button class="btn sm danger" data-act="delFlight" data-id="${f.id}">Delete</button>` : ''}</div></div>`).join('')}
  ${isAdmin() ? '<div class="box" style="margin-top:14px"><b>Backup</b><p class="dim" style="font-size:14px">A full backup file of every flight, group, item and setting. Keep it somewhere safe.</p><div class="row"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="backupPhotos">Backup with full photos</button><button class="btn sm" data-act="restore">Restore from file</button></div></div>' : ''}`;
@@ -472,8 +474,8 @@ function dispatcherChips(f) {
 }
 export function createFlight() {
   const label = $('#nf-label').value.trim(); if (!label) { toast('Enter the flight number or a name.'); return; }
-  const id = rid(); put('flights/' + id, { dids: [], label, date: $('#nf-date').value, at: now(), by: S.me.uid, nextN: 1, bytes: 0 });
-  logEv(`added flight ${label}`, id); closeAll(); setFlight(id);
+  const id = rid(); put('flights/' + id, { dids: [], label, date: $('#nf-date').value, landAt: landAtOf($('#nf-date').value, $('#nf-time').value), at: now(), by: S.me.uid, nextN: 1, bytes: 0 });
+  logEv(`added flight ${label}`, id); closeAll(); setFlight(id); S.tab = 'flight'; schedule();
 }
 async function loadFlight(fid) {
   const get = (name) => getDocs(query(C(name), where('fid', '==', fid)));
@@ -550,7 +552,7 @@ export async function deleteFlight(fid, resume) {
   try {
     await setDoc(D('flights/' + fid), { deleting: true }, { merge: true });
     let n = 0;
-    for (const col of ['photos', 'receipts', 'log', 'items', 'groupsPrivate', 'groups']) await wipe(col, fid, (k) => { span.textContent = `Deleting ${col}… ${n + k}`; });
+    for (const col of ['photos', 'receipts', 'log', 'items', 'groupsPrivate', 'groups', 'tripsPrivate', 'trips']) await wipe(col, fid, (k) => { span.textContent = `Deleting ${col}… ${n + k}`; });
     await del('flights/' + fid);
     if (S.fid === fid) setFlight(S.flights.find((x) => x.id !== fid)?.id || null);
     t.remove(); toast('Flight deleted');
@@ -569,7 +571,7 @@ export async function archiveFlight(fid) {
     logEv('archived the flight', fid); t.remove(); toast('Flight archived');
   } catch (e) { t.remove(); toast('Archiving stopped: ' + (e.code || e.message)); }
 }
-const BACKUP_COLS = ['people', 'config', 'flights', 'items', 'groups', 'groupsPrivate', 'log', 'book'];
+const BACKUP_COLS = ['people', 'config', 'flights', 'items', 'groups', 'groupsPrivate', 'trips', 'tripsPrivate', 'log', 'book'];
 export async function backup(withPhotos) {
   if (!navigator.onLine) { toast('Connect to the internet to make a full backup.'); return; }
   const t = toast('Making the backup…', { ms: 600000 });
@@ -610,6 +612,7 @@ export function openMenu() {
    <label class="fld"><span>Sender phone, shown on the counter screen</span><input id="st-sender" type="tel" inputmode="tel" value="${esc(c.sender || '')}"></label>
    <label class="fld"><span>WhatsApp message to the receiver. Use {name} {service} {tracking} {pieces} {city} {sender}</span><textarea id="st-wa" style="min-height:70px">${esc(c.waTemplate || DEFAULT_WA)}</textarea></label>
    <div class="fld"><span class="lab">Tracking pages ({n} is the tracking number)</span>${['TCS', 'Leopards', 'Daewoo', 'Faisal Movers', 'Cargo'].map((s) => `<div class="row trk"><span>${s}</span><input class="grow" data-trk="${s}" value="${esc((c.trackUrls || {})[s] ?? DEFAULT_TRACK[s] ?? '')}" placeholder="https://…{n}"></div>`).join('')}</div>
+   <label class="fld"><span>For a new passenger, open the contact with the dispatcher</span><select id="st-auto">${AUTO_CHOICES.map(([v, l]) => `<option value="${v ?? ''}" ${(c.autoMin === undefined ? 10 : c.autoMin) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
    <button class="btn wide" id="st-save">Save settings</button></div>
 ` : ''}
   <div class="box"><b>This device</b><p class="dim" style="font-size:14px" id="mn-dev">Checking storage…</p><label class="tgl"><input type="checkbox" id="mn-theme" ${document.documentElement.dataset.theme === 'dark' ? 'checked' : ''}> Dark mode</label></div>`);
@@ -624,7 +627,7 @@ export function openMenu() {
   };
   const sv = sh.querySelector('#st-save'); if (sv) sv.onclick = () => {
     const trackUrls = {}; sh.querySelectorAll('[data-trk]').forEach((i) => (trackUrls[i.dataset.trk] = i.value.trim()));
-    w(setDoc(D('config/main'), { sender: sh.querySelector('#st-sender').value.trim(), waTemplate: sh.querySelector('#st-wa').value.trim() || DEFAULT_WA, trackUrls }, { merge: true }));
+    w(setDoc(D('config/main'), { sender: sh.querySelector('#st-sender').value.trim(), waTemplate: sh.querySelector('#st-wa').value.trim() || DEFAULT_WA, trackUrls, autoMin: sh.querySelector('#st-auto').value === '' ? null : Number(sh.querySelector('#st-auto').value) }, { merge: true }));
     toast('Settings saved');
   };
 }

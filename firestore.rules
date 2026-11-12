@@ -120,6 +120,17 @@ service cloud.firestore {
         allow read: if boss() || (disp() && pid() in resource.data.rel);
         allow write: if bossW();
       }
+      // One document per passenger on a flight: bag counts (open to the flight's dispatchers)…
+      match /trips/{id} {
+        allow read: if boss() || mine();
+        allow create, delete: if bossW();
+        allow update: if bossW() || (mine() && writer() && diff().hasOnly(['gotChecked', 'gotHand', 'gotAt', 'gotBy']));
+      }
+      // …and who the passenger is, released by hand or by the timer (the server opens it).
+      match /tripsPrivate/{id} {
+        allow read: if boss() || (disp() && pid() in resource.data.rel);
+        allow write: if bossW();
+      }
       match /log/{id} {
         allow read: if boss();
         allow create: if (boss() || disp()) && writer();

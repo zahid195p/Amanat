@@ -7,7 +7,7 @@ import '@fontsource/barlow-condensed/700.css';
 import './style.css';
 import {
   S, $, $$, now, plural, isAdmin, can, groupById, active, toSend, ungrouped, visItems, toast, closeSheet, closeTop, layerCount, ask, choose,
-  schedule, setRender, DRAG, initFirebase, auth, onAuthStateChanged, signInWithCustomToken, subscribeBase, SPACE, ROLE_LABEL, isStaff, setRelease, exitViewAs,
+  schedule, setRender, DRAG, initFirebase, auth, onAuthStateChanged, signInWithCustomToken, subscribeBase, SPACE, ROLE_LABEL, isStaff, setRelease, exitViewAs, addTrip, updTrip, setTripRelease, delTrip, gotBag, saveLanding, setTickApi, setOnMe, setRecv, tick,
   unsubscribeAll, setFlight, saveLater, moveItems, combine, deleteItems, setDone, svcKey, lsSet, waitForPendingWrites, db, numberItems, put, now as tnow,
 } from './core.js';
 import { render, shownItems } from './views.js';
@@ -45,6 +45,7 @@ function boot() {
       if (c.env !== SPACE || !ROLE_LABEL[c.role]) { S.me = null; S.user = null; schedule(); whoAmI(); return; }
       S.me = { uid: c.pid, role: c.role, name: c.name || '' };
       S.loginErr = '';
+      if (S.me.role === 'passenger') loadPortal();
       if (isStaff()) {
         subscribeBase();
         waitForPendingWrites(db).then(() => { S.pendingDocs = 0; schedule(); }).catch(() => {});
@@ -53,6 +54,15 @@ function boot() {
     schedule();
   });
 }
+// A passenger's page comes from the server (they have no database access). Refreshed each minute.
+async function loadPortal() {
+  if (S.me?.role !== 'passenger') return;
+  try { S.portal = await api('portal'); } catch (e) { if (!S.portal) S.portal = { error: e.offline ? 'No internet. Connect and try again.' : e.message, trips: [] }; }
+  schedule();
+}
+setInterval(() => { if (document.visibilityState === 'visible') loadPortal(); }, 60000);
+setTickApi((fid) => api('tick', { fid }));
+setOnMe(() => loadPortal());
 // Before login: is this a fresh install (setup), and whose link is this?
 async function whoAmI() {
   S.who = null; S.loginErr = '';
@@ -110,6 +120,13 @@ const ACT = {
   menu: () => openMenu(),
   switchFace: () => switchProfile(),
   people: () => openPeople(),
+  saveLanding: () => saveLanding($('#fl-date').value, $('#fl-time').value),
+  addTrip: () => { const p = S.people.find((x) => x.id === $('#fl-pass')?.value); if (p) addTrip(p); },
+  tripRelease: (el) => setTripRelease(el.dataset.id, el.dataset.on === '1'),
+  delTrip: async (el) => { if (await ask('Remove this passenger from the flight?', 'Remove')) delTrip(el.dataset.id); },
+  gotBag: (el) => gotBag(el.dataset.id, el.dataset.k, Number(el.dataset.d)),
+  selRecv: (el) => setRecv(sel(), el.dataset.v),
+  portalReload: () => loadPortal(),
   exitView: () => exitViewAs(),
   release: (el) => setRelease([el.dataset.id], el.dataset.on === '1'),
   releaseSvc: (el) => { const ids = active().filter((g) => svcKey(g.service) === el.dataset.v && !g.released).map((g) => g.id); if (ids.length) setRelease(ids, true); },
@@ -213,6 +230,8 @@ document.addEventListener('input', (ev) => {
 document.addEventListener('change', (ev) => {
   if (ev.target.matches('input[data-up]')) { const fs = ev.target.files; if (fs && fs.length) handleFiles(fs); ev.target.value = ''; }
   if (ev.target.dataset.gf) { S.gf[ev.target.dataset.gf] = ev.target.value; schedule(); }
+  const tr = ev.target.dataset.trip;
+  if (tr) { const f = ev.target.dataset.f, v = ev.target.value; updTrip(tr, f === 'auto' ? { auto: v === '' ? null : Number(v) } : { [f]: f === 'weight' ? (parseFloat(v) > 0 ? parseFloat(v) : null) : Math.max(0, parseInt(v, 10) || 0) }); }
 });
 let dragDepth = 0;
 document.addEventListener('dragenter', (e) => { if (can('upload') && e.dataTransfer?.types?.includes('Files')) { dragDepth++; document.body.classList.add('filedrag'); } });

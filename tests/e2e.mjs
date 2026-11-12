@@ -25,9 +25,9 @@ async function open(w, h, mobile) {
   return [ctx, page];
 }
 // Add a person from the developer/owner screen and return their link key and code.
-async function addPerson(page, name, role) {
+async function addPerson(page, name, role, phone = '') {
   if (!(await page.$('#pp-name'))) { await page.click('[data-act=menu]'); await page.click('[data-act=people]'); }
-  await page.fill('#pp-name', name); await page.selectOption('#pp-role', role);
+  await page.fill('#pp-name', name); await page.selectOption('#pp-role', role); await page.fill('#pp-phone', phone);
   await page.click('#pp-add');
   await page.waitForSelector('#cp-text[data-key]');
   const r = await page.evaluate(() => { const t = document.querySelector('#cp-text'); return { key: t.dataset.key, pin: t.dataset.pin, text: t.value }; });
@@ -59,9 +59,10 @@ ok(await until(a, () => /TEST/.test(document.querySelector('#hdr').innerText)), 
 /* ---------- 2. people: owner, two dispatchers, a client ---------- */
 const owner = await addPerson(a, 'Tayyab bhai', 'owner');
 ok(/#k=/.test(owner.text) && /Code: \d{6}/.test(owner.text), 'invite has a private link and a 6-digit code');
-const d1 = await addPerson(a, 'Bilal', 'dispatcher');
+const d1 = await addPerson(a, 'Bilal', 'dispatcher', '0333 5556667');
 const d2 = await addPerson(a, 'Other City', 'dispatcher');
 const cl = await addPerson(a, 'Abdullah', 'client');
+const pa = await addPerson(a, 'Hamza', 'passenger', '0301 9998887');
 await a.keyboard.press('Escape'); await a.keyboard.press('Escape');
 
 /* ---------- 3. owner logs in with link + code and prepares a flight ---------- */
@@ -75,6 +76,8 @@ ok(await until(o, () => /No flight yet/.test(document.body.innerText)), 'owner l
 ok(await o.evaluate(() => !location.hash), 'the key is removed from the address bar');
 await o.click('[data-act=flights]'); await o.fill('#nf-label', 'PK 853'); await o.click('[data-act=createFlight]');
 ok(await until(o, () => /PK 853/.test(document.querySelector('#hdr').innerText)), 'flight created');
+ok(await until(o, () => /No passengers yet/.test(document.body.innerText)), 'a new flight opens on the Flight tab');
+await o.click('[data-act=tab][data-v=photos]');
 await o.setInputFiles('input[data-up][multiple]', [1, 2, 3, 4].map((n) => `${IMG}/p${n}.jpg`));
 ok(await until(o, () => [...document.querySelectorAll('.card .num')].map((x) => x.textContent).sort().join() === '#1,#2,#3,#4', null, 25000), '4 items numbered #1-#4');
 await o.setInputFiles('input[data-up][multiple]', [`${IMG}/bad.heic`]);
@@ -153,6 +156,55 @@ ok(await until(b, () => !/Qasim/.test(document.body.innerText), null, 15000), 'o
 await o.click('[data-act=releaseSvc][data-v=Daewoo]');
 ok(await until(b, () => /Sana Bibi/.test(document.body.innerText), null, 15000), '"Show all Daewoo to dispatcher" releases that courier\'s parcels');
 
+/* ---------- 6b. flight day: passenger, bags, timed release ---------- */
+await o.evaluate(() => { window.__noTick = true; }); // so the server timer (the dispatcher's path) is what opens it
+await o.click('[data-act=tab][data-v=flight]');
+await o.selectOption('#fl-pass', { label: 'Hamza' }); await o.click('[data-act=addTrip]');
+ok(await until(o, () => /Hamza/.test(document.querySelector('.trip')?.innerText || '')), 'owner adds passenger Hamza to the flight');
+await o.fill('.trip [data-f=checked]', '2'); await o.press('.trip [data-f=checked]', 'Tab');
+await o.fill('.trip [data-f=hand]', '1'); await o.press('.trip [data-f=hand]', 'Tab');
+await b.click('[data-act=tab][data-v=flight]');
+ok(await until(b, () => /Passenger 1/.test(document.body.innerText) && /2 checked bags, 1 hand carry/.test(document.body.innerText), null, 15000), 'dispatcher sees 1 passenger, 2 checked bags, 1 hand carry');
+bt = await text(b);
+ok(!/Hamza|0301/.test(bt) && /not released yet/i.test(bt), 'dispatcher does not see who the passenger is');
+const tripId = await o.evaluate(() => document.querySelector('.trip [data-f=checked]').dataset.trip);
+const td = await b.evaluate(async (t) => [await window.__t.get('tripsPrivate/' + t), await window.__t.list('tripsPrivate'), await window.__t.upd('trips/' + t, { checked: 9 })], tripId);
+ok(td.every((r) => r === 'permission-denied'), 'going around the app: passenger identity refused, bag counts cannot be changed by the dispatcher');
+// the passenger's own page
+const [P, p] = await open(375, 760, true);
+await login(p, pa.key, pa.pin);
+ok(await until(p, () => /Hello Hamza/.test(document.body.innerText) && /PK 853/.test(document.body.innerText) && /checked bags/.test(document.body.innerText), null, 15000), 'passenger sees his flight and bag count');
+let pt = await text(p);
+ok(!/Bilal|0333|Qasim|Sana|Tayyab/.test(pt) && /when it is released|Pakistan time/.test(pt), 'passenger does not see the dispatcher, or any client');
+const pd = await p.evaluate(async (i) => [await window.__t.get('flights/' + i.fid), await window.__t.list('items'), await window.__t.list('people'), await window.__t.list('trips')], ids);
+ok(pd.every((r) => r === 'permission-denied'), 'a passenger login can read nothing from the database directly');
+// timer: landing in 5 minutes, release 10 minutes before = already due
+const pk = new Date(Date.now() + 5 * 60000 + 5 * 3600000).toISOString();
+await o.fill('#fl-date', pk.slice(0, 10)); await o.fill('#fl-time', pk.slice(11, 16)); await o.click('[data-act=saveLanding]');
+ok(await until(b, () => /Hamza/.test(document.body.innerText) && /0301 9998887/.test(document.body.innerText), null, 20000), 'timer: 10 minutes before landing the dispatcher sees the passenger (opened by the server)');
+ok(await until(o, () => /can see each other/.test(document.querySelector('.trip')?.innerText || ''), null, 15000), 'owner sees that the contact is now open');
+await p.click('[data-act=portalReload]');
+ok(await until(p, () => /Bilal/.test(document.body.innerText) && /0333 5556667/.test(document.body.innerText) && !!document.querySelector('a[href^="https://wa.me/923335556667"]'), null, 15000), 'passenger now sees the dispatcher with call and WhatsApp buttons');
+// collecting bags
+await b.click('[data-act=gotBag][data-k=checked][data-d="1"]');
+ok(await until(o, () => /collected 1 of 2/.test(document.querySelector('.trip')?.innerText || ''), null, 15000), 'dispatcher ticks a collected bag; owner sees 1 of 2');
+// hide again
+await o.click('[data-act=tripRelease][data-on="0"]');
+ok(await until(b, () => !/Hamza/.test(document.body.innerText) && /Passenger 1/.test(document.body.innerText), null, 15000), 'owner hides it again: dispatcher loses the passenger contact');
+await p.click('[data-act=portalReload]');
+ok(await until(p, () => !/Bilal/.test(document.body.innerText) && /when it is released/.test(document.body.innerText), null, 15000), 'and the passenger loses the dispatcher contact');
+await o.click('[data-act=tripRelease][data-on="1"]');
+ok(await until(b, () => /Hamza/.test(document.body.innerText), null, 15000), '"Release now" by hand works too');
+await o.screenshot({ path: `${shots}/o-flight.png` }); await b.screenshot({ path: `${shots}/b-flight.png` });
+await P.close();
+// receive check
+await b.click('[data-act=tab][data-v=photos]'); await b.click('[data-act=show][data-v=all]');
+await b.click('.card:nth-child(1) .ph'); await b.click('#selbar [data-act=selRecv][data-v=ok]');
+await b.click('.card:nth-child(2) .ph'); await b.click('#selbar [data-act=selRecv][data-v=missing]');
+await o.click('[data-act=tab][data-v=photos]'); await o.click('[data-act=show][data-v=all]');
+ok(await until(o, () => /Received/.test(document.querySelector('.card:nth-child(1) .recv')?.textContent || '') && /Missing/.test(document.querySelector('.card:nth-child(2) .recv')?.textContent || '') && /2 of 4 checked, 1 missing/.test(document.body.innerText), null, 15000), 'receive check: dispatcher marks received and missing; owner sees it');
+await o.click('[data-act=tab][data-v=service]'); await b.click('[data-act=tab][data-v=service]');
+
 /* ---------- 7. view as ---------- */
 await a.reload();
 ok(await until(a, () => /PK 853/.test(document.querySelector('#hdr').innerText), null, 15000), 'developer sees the flight the owner made');
@@ -174,6 +226,10 @@ await a.click('.prow:has-text("Abdullah") [data-pp]'); await a.click('#mp-view')
 ok(await until(a, () => /Viewing as Abdullah/.test(document.body.innerText) && /being prepared/.test(document.body.innerText), null, 15000), 'client view: placeholder page');
 const cv = await a.evaluate(async (i) => [await window.__t.get('flights/' + i.fid), await window.__t.list('items'), await window.__t.get('groupsPrivate/' + i.groups[0])], ids);
 ok(cv.every((r) => r === 'permission-denied'), 'a client login can read nothing from the database');
+await a.click('[data-act=exitView]');
+await a.click('[data-act=menu]'); await a.click('[data-act=people]');
+await a.click('.prow:has-text("Hamza") [data-pp]'); await a.click('#mp-view');
+ok(await until(a, () => /Viewing as Hamza/.test(document.body.innerText) && /PK 853/.test(document.body.innerText) && /Bilal/.test(document.body.innerText), null, 15000), 'view as the passenger shows his page');
 await a.click('[data-act=exitView]');
 
 /* ---------- 8. offline (owner): nothing is lost ---------- */

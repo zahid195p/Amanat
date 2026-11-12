@@ -49,8 +49,18 @@ only their own part; contacts reach a device only after the owner releases them.
 - `tests/e2e.mjs`: 64 checks, including direct database attempts by a dispatcher, a dispatcher not
   on the flight, a client login and a view-as login.
 
+### Step 2: done, on the test site
+- Flight tab: landing time (always Pakistan time, `landAt`), passengers (`trips` = bag counts, open to the
+  flight's dispatchers; `tripsPrivate` = who the passenger is, locked like receivers).
+- Timed release: `auto` minutes before landing -> `dueAt`. The owner's app opens due contacts itself; a
+  dispatcher's app calls `/api/tick`, and the server checks the time and opens it. Default in Menu, Settings.
+- Passenger page: `/api/portal` (server reads Firestore with the service account; passengers have no
+  database access). Shows flight, bag counts, and the dispatchers' names and phones once released.
+- Receive check: `items.recv` = ok / missing / damaged, set from the selection bar or the viewer.
+- Not done: which items are in which passenger's bags (items belong to the flight, not to a passenger).
+- `tests/e2e.mjs`: 81 checks.
+
 ### Next
-- Step 2: passengers, bag counts, dispatcher airport view, timed contact release, receive check.
 - Step 3: client page (server-rendered through a function, no database access).
 - Step 4: slips with AI matching, expenses.
 - Switch live to version 2: migrate root collections into `apps/live`, deploy to project `amanat`.

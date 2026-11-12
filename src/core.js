@@ -37,7 +37,7 @@ export const S = {
   ready: false, configured: !!firebaseConfig.projectId, fatal: null,
   user: undefined, me: null, people: [], setup: null, real: null,
   cfg: {}, flights: [], flightsLoaded: false, flightsFromCache: true,
-  fid: null, items: [], groups: [], itemsLoaded: false,
+  fid: null, items: [], groups: [], trips: [], itemsLoaded: false, portal: null,
   tab: 'photos', show: null, sel: new Set(), lastSel: null, q: '',
   gf: { city: '', service: '', status: 'open', sort: 'parcel' },
   uq: [], gridLimit: 120, hidden: new Set(), inflight: 0, pendingDocs: 0, online: navigator.onLine,
@@ -61,6 +61,20 @@ export const todayISO = () => { const d = new Date(); d.setMinutes(d.getMinutes(
 export function fmtDate(d) { if (!d) return ''; const x = new Date(d + 'T00:00:00'); return isNaN(x) ? d : x.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); }
 export function fmtTime(t) { if (!t) return ''; const d = new Date(t); return d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); }
 export function fmtBytes(b) { b = Math.max(0, b || 0); if (b < 1024 * 1024) return Math.round(b / 1024) + ' KB'; if (b < 1024 ** 3) return (b / 1024 / 1024).toFixed(1) + ' MB'; return (b / 1024 ** 3).toFixed(2) + ' GB'; }
+/* Flights land in Pakistan, so landing times are always typed and shown in Pakistan time,
+   wherever the phone is (the owner is often in China). */
+export const landAtOf = (date, time) => { const t = Date.parse(`${date}T${time || ''}:00+05:00`); return date && time && !isNaN(t) ? t : null; };
+const PKT = { timeZone: 'Asia/Karachi' };
+export const fmtClock = (ms) => (ms ? new Date(ms).toLocaleTimeString('en-GB', { ...PKT, hour: '2-digit', minute: '2-digit' }) : '');
+export const fmtLanding = (ms) => (ms ? new Date(ms).toLocaleString('en-GB', { ...PKT, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' (Pakistan time)' : '');
+export const timeOfPk = (ms) => (ms ? new Date(ms + 5 * 3600000).toISOString().slice(11, 16) : '');
+export function fmtIn(ms) {
+  const d = ms - Date.now(); const m = Math.round(Math.abs(d) / 60000);
+  const t = m < 60 ? `${m} min` : m < 1440 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${Math.round(m / 1440)} days`;
+  return d >= 0 ? 'in ' + t : t + ' ago';
+}
+export const AUTO_CHOICES = [[null, 'Only when I release it'], [0, 'At landing time'], [10, '10 minutes before landing'], [20, '20 minutes before landing'], [30, '30 minutes before landing'], [60, '1 hour before landing']];
+export const dueAtOf = (auto, landAt) => (auto === null || auto === undefined || !landAt ? null : landAt - auto * 60000);
 export const isAdmin = () => S.me?.role === 'dev' || S.me?.role === 'owner'; // "boss": sees and does everything
 export const isDispatcher = () => S.me?.role === 'dispatcher';
 export const isStaff = () => isAdmin() || isDispatcher();
@@ -210,6 +224,8 @@ function useEmulators(d, a) {
   connectAuthEmulator(a, `http://${location.hostname}:9099`, { disableWarnings: true });
 }
 let main = null, viewApp = null;
+let onMe = () => {};
+export const setOnMe = (fn) => (onMe = fn); // called when the person on screen changes (view as)
 /* ---------- view as ----------
    A second, separate sign-in with a read-only token for that person. The screen then shows
    exactly what the database rules let them see; nothing can be changed while viewing. */
@@ -222,7 +238,7 @@ export async function enterViewAs(token, person) {
   await signInWithCustomToken(vauth, token);
   db = vdb; auth = vauth;
   S.real = S.me; S.me = { uid: person.id, role: person.role, name: person.name, viewAs: true };
-  resetData(); if (isStaff()) subscribeBase(); schedule();
+  resetData(); if (isStaff()) subscribeBase(); onMe(); schedule();
 }
 export async function exitViewAs() {
   if (!S.real) return;
@@ -234,7 +250,7 @@ export async function exitViewAs() {
   try { await deleteApp(app); } catch (e) { /* ignore */ }
 }
 function resetData() {
-  S.flights = []; S.flightsLoaded = false; S.items = []; S.groups = []; S.people = []; S.cfg = {}; S.sel.clear(); S.uq = []; S.fid = main && db === main.db ? S.fid : null;
+  S.flights = []; S.flightsLoaded = false; S.items = []; S.groups = []; S.trips = []; S.portal = null; S.people = []; S.cfg = {}; S.sel.clear(); S.uq = []; S.fid = main && db === main.db ? S.fid : null;
 }
 const viewing = () => { if (S.me?.viewAs) { toast('You are only viewing. Nothing was changed.'); return true; } return false; };
 export { onAuthStateChanged, signInWithCustomToken, signOut, waitForPendingWrites };
@@ -341,7 +357,7 @@ export function setFlight(fid) {
   flushAll(); commitUndos(); // B12
   S.fid = fid; S.subbed = fid; if (!S.me?.viewAs) lsSet('amanat3.fid', fid); S.sel.clear(); S.show = null; S.gridLimit = 120;
   unsubF.forEach((u) => u()); unsubF = []; S.items = []; S.groups = []; S.itemsLoaded = false;
-  gPub = []; gPriv = new Map();
+  gPub = []; gPriv = new Map(); tPub = []; tPriv = new Map(); S.trips = [];
   if (fid) {
     // A dispatcher's queries must match the rules exactly ("only what I am on"), so they ask
     // for everything of theirs and the flight is picked out here.
@@ -356,8 +372,17 @@ export function setFlight(fid) {
     }, dbErr));
     unsubF.push(onSnapshot(q1('groups'), { includeMetadataChanges: true }, (q) => { gPub = ofFlight(q); mergeGroups(); numberDocs('groups'); }, dbErr));
     unsubF.push(onSnapshot(q1('groupsPrivate', 'rel'), { includeMetadataChanges: true }, (q) => { gPriv = new Map(ofFlight(q).map((d) => [d.id, d])); mergeGroups(); }, dbErr));
+    unsubF.push(onSnapshot(q1('trips'), (q) => { tPub = ofFlight(q); mergeTrips(); }, dbErr));
+    unsubF.push(onSnapshot(q1('tripsPrivate', 'rel'), (q) => { tPriv = new Map(ofFlight(q).map((d) => [d.id, d])); mergeTrips(); }, dbErr));
   }
   schedule();
+}
+// A passenger on a flight = bag counts (open to the flight's dispatchers) + who they are (locked).
+let tPub = [], tPriv = new Map();
+function mergeTrips() {
+  S.trips = tPub.map((t) => { const p = tPriv.get(t.id); return p ? { ...t, pid: p.pid, name: p.name || '', phone: p.phone || '', released: !!p.released } : { ...t, locked: true }; })
+    .sort((a, b) => (a.at || 0) - (b.at || 0));
+  schedule(); tick();
 }
 // A group on screen = its open part + the receiver details, when this login may see them.
 let gPub = [], gPriv = new Map();
@@ -525,14 +550,81 @@ export function setRelease(gids, on) {
 export async function setFlightDispatchers(fid, dids) {
   if (!isAdmin() || viewing()) return;
   const refs = [];
-  for (const name of ['items', 'groups', 'groupsPrivate']) {
+  for (const name of ['items', 'groups', 'groupsPrivate', 'trips', 'tripsPrivate']) {
     const q = await getDocs(query(C(name), where('fid', '==', fid)));
-    q.docs.forEach((d) => refs.push([d.ref, name === 'groupsPrivate' ? { dids, rel: d.data().released ? dids : [] } : { dids }]));
+    q.docs.forEach((d) => refs.push([d.ref, name.endsWith('Private') ? { dids, rel: d.data().released ? dids : [] } : { dids }]));
   }
   for (let k = 0; k < refs.length; k += 400) {
     const b = writeBatch(db); refs.slice(k, k + 400).forEach(([r, data]) => b.update(r, data)); await b.commit();
   }
   await updateDoc(D('flights/' + fid), { dids });
+}
+
+/* ---------- passengers on a flight ---------- */
+export function addTrip(person) {
+  const f = curFlight(); if (!f || !isAdmin() || viewing()) return;
+  const id = rid(); const auto = S.cfg.autoMin === undefined ? 10 : S.cfg.autoMin; const dueAt = dueAtOf(auto, f.landAt);
+  w(setDoc(D('trips/' + id), { fid: f.id, dids: f.dids || [], checked: 0, hand: 0, weight: null, auto, dueAt, gotChecked: 0, gotHand: 0, at: now() }), 'trip');
+  w(setDoc(D('tripsPrivate/' + id), { fid: f.id, dids: f.dids || [], pid: person.id, name: person.name, phone: person.phone || '', released: false, rel: [], dueAt }), 'trip');
+  logEv(`added passenger ${person.name}`);
+}
+export function updTrip(id, patch) {
+  if (viewing()) return;
+  const t = S.trips.find((x) => x.id === id); if (!t) return;
+  if ('auto' in patch) { patch.dueAt = dueAtOf(patch.auto, curFlight()?.landAt); w(updateDoc(D('tripsPrivate/' + id), { dueAt: patch.dueAt }), 'trip'); }
+  w(updateDoc(D('trips/' + id), patch), 'trip');
+}
+export function setTripRelease(id, on) {
+  if (!isAdmin() || viewing()) return;
+  const t = S.trips.find((x) => x.id === id); if (!t) return;
+  // Hiding again also stops the timer, or it would reopen at once.
+  if (!on) w(updateDoc(D('trips/' + id), { auto: null, dueAt: null }), 'trip');
+  w(updateDoc(D('tripsPrivate/' + id), on ? { released: true, rel: curFlight()?.dids || [], relAt: now(), relBy: S.me.uid } : { released: false, rel: [], dueAt: null }), 'trip');
+  logEv(`${on ? 'released' : 'hid'} the contact of passenger ${t.name}`);
+  toast(on ? `${t.name} and the dispatcher can now see each other's contact` : `${t.name}'s contact is hidden again`);
+}
+export function delTrip(id) {
+  if (!isAdmin() || viewing()) return;
+  w(deleteDoc(D('tripsPrivate/' + id)), 'trip'); w(deleteDoc(D('trips/' + id)), 'trip');
+}
+export function gotBag(id, kind, d) {
+  const t = S.trips.find((x) => x.id === id); if (!t) return;
+  const key = kind === 'hand' ? 'gotHand' : 'gotChecked'; const max = kind === 'hand' ? t.hand || 0 : t.checked || 0;
+  upd('trips/' + id, { [key]: Math.max(0, Math.min(max, (t[key] || 0) + d)), gotAt: now(), gotBy: S.me.uid });
+}
+export function saveLanding(date, time) {
+  const f = curFlight(); if (!f || !isAdmin() || viewing()) return;
+  const landAt = landAtOf(date, time);
+  upd('flights/' + f.id, { date, landAt });
+  for (const t of S.trips) { const dueAt = t.released ? null : dueAtOf(t.auto, landAt); w(updateDoc(D('trips/' + t.id), { dueAt }), 'trip'); w(updateDoc(D('tripsPrivate/' + t.id), { dueAt }), 'trip'); }
+  toast(landAt ? 'Landing time saved' : 'Saved. Add a landing time to use timed release.');
+}
+// Timed release. The owner's app opens a due contact itself; a dispatcher's app asks the
+// server, which checks the time and opens it. Called every minute and when data changes.
+let ticking = false;
+export async function tick() {
+  if (ticking || !S.me || S.me.viewAs || !navigator.onLine || !S.fid || (EMU && window.__noTick)) return;
+  const t0 = now();
+  if (isAdmin()) {
+    for (const t of S.trips) if (!t.locked && !t.released && t.dueAt && t.dueAt <= t0) w(updateDoc(D('tripsPrivate/' + t.id), { released: true, rel: curFlight()?.dids || [], relAt: t0, relBy: 'timer' }), 'timer');
+    return;
+  }
+  if (!isDispatcher() || !S.trips.some((t) => t.locked && t.dueAt && t.dueAt <= t0)) return;
+  ticking = true;
+  try { await tickApi(S.fid); } catch (e) { /* tried again next minute */ }
+  ticking = false;
+}
+let tickApi = async () => {};
+export const setTickApi = (fn) => (tickApi = fn);
+setInterval(() => { tick(); schedule(); }, 60000);
+
+/* ---------- receive check: did each item really arrive? ---------- */
+export const RECV = { ok: 'Received', missing: 'Missing', damaged: 'Damaged' };
+export function setRecv(ids, v) {
+  const its = ids.map((id) => S.items.find((i) => i.id === id)).filter(Boolean); if (!its.length) return;
+  its.forEach((i) => upd('items/' + i.id, { recv: v || null }));
+  logEv(`marked ${its.map(numLabel).join(', ')} ${v ? RECV[v].toLowerCase() : 'not checked'}`);
+  S.sel.clear(); schedule();
 }
 
 // Local test builds only: lets the end-to-end test try to go around the app and hit the

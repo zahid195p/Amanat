@@ -2,7 +2,7 @@
 import morphdom from 'morphdom';
 import {
   S, $, esc, plural, fmtDate, fmtPhone, fmtBytes, isAdmin, can, curFlight, groupById, gColor, gTitle, visItems, itemsIn, gLabel, pLabel,
-  safeImg, isDispatcher, isStaff, SPACE, ROLE_LABEL,
+  safeImg, isDispatcher, isStaff, SPACE, ROLE_LABEL, fmtLanding, fmtClock, fmtIn, timeOfPk, AUTO_CHOICES, RECV,
   ungrouped, active, sentGroups, toSend, qtyOf, piecesIn, numLabel, itemLabel, svcKey, svcSort, mainSvc, missing,
   trackUrl, STEPS, FREE_BYTES, layerCount,
 } from './core.js';
@@ -35,7 +35,7 @@ export function render() {
   const tb = $('#tabs'); tb.hidden = !on;
   if (on) {
     const un = ungrouped().length;
-    tb.innerHTML = [['photos', 'Photos'], ['groups', 'Groups'], ['service', 'By service']].map(([k, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-act="tab" data-v="${k}">${l}${k === 'photos' && un && S.items.length ? `<span class="dot" title="Not in a group">${un}</span>` : ''}</button>`).join('');
+    tb.innerHTML = [['flight', 'Flight'], ['photos', 'Photos'], ['groups', 'Groups'], ['service', 'By service']].map(([k, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-act="tab" data-v="${k}">${l}${k === 'photos' && un && S.items.length ? `<span class="dot" title="Not in a group">${un}</span>` : ''}</button>`).join('');
   }
   selbar(on);
   refreshOpenLayers();
@@ -62,7 +62,8 @@ function view() {
   if (S.user === undefined) return '<div class="spin" aria-label="Loading"></div>';
   if (!S.me) return !S.key && S.setup?.needed ? vSetup() : vLogin();
   const banner = S.me.viewAs ? `<div class="note view" data-key="viewas"><span>Viewing as <b>${esc(S.me.name)}</b> (${ROLE_LABEL[S.me.role]}). This is exactly what they can see. Nothing can be changed.</span><button class="btn sm" data-act="exitView">Stop viewing</button></div>` : '';
-  if (!isStaff()) return banner + `<div class="empty narrow"><h2>Hello ${esc(S.me.name)}</h2><p>Your page is being prepared. You will see your ${S.me.role === 'passenger' ? 'flight' : 'parcels'} here soon.</p></div>`;
+  if (S.me.role === 'passenger') return banner + vPassenger();
+  if (!isStaff()) return banner + `<div class="empty narrow"><h2>Hello ${esc(S.me.name)}</h2><p>Your page is being prepared. You will see your parcels here soon.</p></div>`;
   return banner + staffView();
 }
 function staffView() {
@@ -70,7 +71,8 @@ function staffView() {
   if (!curFlight()) return `<div class="empty narrow"><h2>No flight yet</h2>${can('flights') ? '<p>Add the flight first. Photos and groups are kept per flight.</p><button class="btn primary" data-act="flights">Add a flight</button>' : '<p>You are not on any flight right now. It appears here when the owner adds you to one.</p>'}</div>`;
   if (curFlight().deleting) return `<div class="empty narrow"><h2>This flight is being deleted</h2><p>${isAdmin() ? '<button class="btn danger" data-act="resumeDelete">Finish deleting</button>' : 'Pick another flight.'}</p><button class="btn" data-act="flights">Flights</button></div>`;
   let h = installHint();
-  if (S.tab === 'groups') h += vGroups();
+  if (S.tab === 'flight') h += vFlight();
+  else if (S.tab === 'groups') h += vGroups();
   else if (S.tab === 'service') h += vService();
   else h += vPhotos();
   return h;
@@ -121,12 +123,67 @@ function matchItem(i) {
 }
 const searchBox = (ph) => `<div class="search"><input id="q" type="search" data-q value="${esc(S.q)}" placeholder="${ph}" aria-label="Search" autocomplete="off"></div>`;
 
+/* ---------- flight day: landing time, passengers, bags ---------- */
+const bagWord = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+function tripHint(t, f) {
+  if (t.released) return '';
+  if (t.auto === null || t.auto === undefined) return 'The owner will release the contact.';
+  if (!t.dueAt) return 'Opens by timer once the landing time is set.';
+  return `Opens at ${fmtClock(t.dueAt)} Pakistan time (${t.auto ? t.auto + ' min before landing' : 'landing time'}).`;
+}
+function vFlight() {
+  const f = curFlight(); const boss = isAdmin(); const ts = S.trips;
+  const sum = (k) => ts.reduce((a, t) => a + (Number(t[k]) || 0), 0);
+  let h = `<div class="box" data-key="fl-head"><h2 style="font-size:28px">${esc(f.label || 'Flight')}</h2>`;
+  if (boss) h += `<div class="two" style="margin-top:8px"><label class="fld"><span>Date</span><input id="fl-date" type="date" value="${esc(f.date || '')}"></label><label class="fld"><span>Landing time (Pakistan time)</span><input id="fl-time" type="time" value="${esc(timeOfPk(f.landAt))}"></label></div><button class="btn" data-act="saveLanding">Save date and time</button>`;
+  h += `<p style="margin:8px 0 0;font-weight:600">${f.landAt ? `Lands ${esc(fmtLanding(f.landAt))}, ${esc(fmtIn(f.landAt))}` : esc(fmtDate(f.date)) + (boss ? '' : '. The landing time is not set yet.')}</p></div>`;
+  h += `<div class="dgrid"><div><b>${ts.length}</b>passenger${ts.length === 1 ? '' : 's'}</div><div><b>${sum('checked')}</b>checked bags</div><div><b>${sum('hand')}</b>hand carries</div>${sum('weight') ? `<div><b>${+sum('weight').toFixed(1)}</b>kg</div>` : ''}<div><b>${sum('gotChecked') + sum('gotHand')}</b>collected</div></div>`;
+  if (!ts.length) h += `<div class="empty"><h2>No passengers yet</h2><p>${boss ? 'Add who is carrying the luggage on this flight.' : 'The owner has not added the passengers yet.'}</p></div>`;
+  h += ts.map((t, k) => {
+    const who = t.locked ? `Passenger ${k + 1}` : t.name || `Passenger ${k + 1}`;
+    const got = (kind, n, g) => (n ? `<div class="bagrow"><span class="grow">${kind === 'hand' ? 'Hand carries' : 'Checked bags'}: collected <b>${g || 0} of ${n}</b></span>${can('send') ? `<button class="btn sm" data-act="gotBag" data-id="${t.id}" data-k="${kind}" data-d="-1" aria-label="One less">−</button><button class="btn sm primary" data-act="gotBag" data-id="${t.id}" data-k="${kind}" data-d="1" aria-label="One more">+</button>` : ''}</div>` : '');
+    let c = `<div class="gcard trip ${t.released ? 'open' : ''}" data-key="trip-${t.id}" style="--g:${t.released ? 'var(--go)' : 'var(--line)'}"><div class="gc-top"><span class="gc-name">${esc(who)}</span><span class="dim">${bagWord(t.checked || 0, 'checked bag')}, ${bagWord(t.hand || 0, 'hand carry').replace('carrys', 'carries')}${t.weight ? ', ' + esc(t.weight) + ' kg' : ''}</span></div>`;
+    if (boss) {
+      c += `<div class="three"><label class="fld"><span>Checked bags</span><input inputmode="numeric" data-trip="${t.id}" data-f="checked" value="${esc(t.checked ?? 0)}"></label><label class="fld"><span>Hand carries</span><input inputmode="numeric" data-trip="${t.id}" data-f="hand" value="${esc(t.hand ?? 0)}"></label><label class="fld"><span>Weight kg</span><input inputmode="decimal" data-trip="${t.id}" data-f="weight" value="${esc(t.weight ?? '')}"></label></div>`;
+      c += t.released
+        ? `<div class="rel on">Passenger and dispatcher can see each other's contact <button class="btn sm" data-act="tripRelease" data-id="${t.id}" data-on="0">Hide</button></div>`
+        : `<label class="fld"><span>Open the contact between passenger and dispatcher</span><select data-trip="${t.id}" data-f="auto">${AUTO_CHOICES.map(([v, l]) => `<option value="${v ?? ''}" ${(t.auto ?? null) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label><div class="rel hid">${esc(tripHint(t, f))} <button class="btn sm" data-act="tripRelease" data-id="${t.id}" data-on="1">Release now</button></div>`;
+    }
+    c += got('checked', t.checked, t.gotChecked) + got('hand', t.hand, t.gotHand);
+    if (!boss) c += t.locked ? `<div class="rel hid">Contact not released yet. ${esc(tripHint(t, f))}</div>` : '';
+    if (!t.locked && t.phone) c += `<div class="row" style="margin-top:8px"><b>${esc(fmtPhone(t.phone))}</b>${telLinks({ phone: t.phone }, true)}</div>`;
+    else if (!t.locked && !boss) c += '<div class="dim">No phone number saved for this passenger.</div>';
+    if (boss) c += `<div class="row" style="margin-top:8px"><button class="btn sm danger" data-act="delTrip" data-id="${t.id}">Remove from flight</button></div>`;
+    return c + '</div>';
+  }).join('');
+  if (boss) {
+    const free = S.people.filter((p) => p.role === 'passenger' && !p.disabled && !ts.some((t) => t.pid === p.id));
+    h += `<div class="box" data-key="fl-add"><b>Add a passenger to this flight</b>${free.length ? `<div class="row" style="margin-top:8px"><select id="fl-pass" class="grow" style="width:auto">${free.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select><button class="btn primary" data-act="addTrip">Add</button></div>` : '<p class="dim" style="margin-bottom:0">Add the person first in Menu, People and links, with the role Passenger.</p>'}
+    <p class="dim" style="font-size:13px;margin-bottom:0">Dispatchers on this flight see how many passengers and bags are coming. They see who the passenger is only after the release. Choose the dispatchers in Flights (tap the flight name at the top).</p></div>`;
+  }
+  return h;
+}
+
+/* ---------- the passenger's own page ---------- */
+function vPassenger() {
+  const p = S.portal;
+  if (!p) return '<div class="spin" aria-label="Loading"></div>';
+  if (p.error) return `<div class="empty narrow"><h2>Hello ${esc(S.me.name)}</h2><p>${esc(p.error)}</p><button class="btn" data-act="portalReload">Try again</button></div>`;
+  if (!p.trips.length) return `<div class="empty narrow"><h2>Hello ${esc(S.me.name)}</h2><p>You have no flight right now. It appears here when it is added.</p><button class="btn" data-act="portalReload">Refresh</button></div>`;
+  return `<div class="faces"><h1 style="font-size:30px">Hello ${esc(S.me.name)}</h1>${p.trips.map((t) => `<div class="box" data-key="pt-${esc(t.id)}"><h2 style="font-size:26px">${esc(t.flight.label)}</h2>
+   <p style="font-weight:600">${t.flight.landAt ? 'Lands ' + esc(fmtLanding(t.flight.landAt)) : esc(fmtDate(t.flight.date))}</p>
+   <div class="dgrid"><div><b>${t.checked}</b>checked bags</div><div><b>${t.hand}</b>hand carries</div>${t.weight ? `<div><b>${esc(t.weight)}</b>kg</div>` : ''}</div>
+   <h3 style="font-size:20px;margin-top:10px">Who collects the luggage</h3>
+   ${t.released ? (t.dispatchers.length ? t.dispatchers.map((d) => `<div class="row" style="margin-top:6px"><b class="grow">${esc(d.name)}${d.phone ? ' · ' + esc(fmtPhone(d.phone)) : ''}</b>${telLinks({ phone: d.phone }, true)}</div>`).join('') : '<p class="dim">The person is not chosen yet.</p>') : `<p class="dim">You will see the name and number here ${t.dueAt ? 'at ' + esc(fmtClock(t.dueAt)) + ' Pakistan time' : 'when it is released'}.</p>`}</div>`).join('')}
+   <button class="btn" data-act="portalReload">Refresh</button></div>`;
+}
+
 /* ---------- photos ---------- */
 function card(i) {
   const g = groupById(i.groupId); const sel = S.sel.has(i.id); const ph = i.photos || [];
   const edit = can('name');
   return `<div class="card ${sel ? 'sel' : ''}" data-key="it-${i.id}" data-iid="${i.id}">
- <div class="ph" data-tsel="${i.id}" role="button" tabindex="0" aria-pressed="${sel}" aria-label="Select item ${numLabel(i)}">${ph[0] ? `<img src="${safeImg(ph[0].t)}" alt="" draggable="false" loading="lazy" decoding="async">` : ''}<span class="num">${numLabel(i)}</span>${ph.length > 1 ? `<span class="stack">${ph.length} photos</span>` : ''}${g ? `<span class="gtag" style="--g:${gColor(g)}">${esc(gLabel(g))}</span>` : ''}<span class="ck">${sel ? '✓' : ''}</span>${i._pending ? `<span class="pend on-ph">${ICON.cloud}</span>` : ''}</div>
+ <div class="ph" data-tsel="${i.id}" role="button" tabindex="0" aria-pressed="${sel}" aria-label="Select item ${numLabel(i)}">${ph[0] ? `<img src="${safeImg(ph[0].t)}" alt="" draggable="false" loading="lazy" decoding="async">` : ''}<span class="num">${numLabel(i)}</span>${ph.length > 1 ? `<span class="stack">${ph.length} photos</span>` : ''}${g ? `<span class="gtag" style="--g:${gColor(g)}">${esc(gLabel(g))}</span>` : ''}${i.recv ? `<span class="recv r-${esc(i.recv)}">${esc(RECV[i.recv] || '')}</span>` : ''}<span class="ck">${sel ? '✓' : ''}</span>${i._pending ? `<span class="pend on-ph">${ICON.cloud}</span>` : ''}</div>
  <button class="zoom" data-act="view" data-id="${i.id}" aria-label="Open large">⤢</button>
  <div class="meta">${edit ? `<input class="nm" id="nm-${i.id}" data-name="${i.id}" value="${esc(i.name || '')}" placeholder="Name it, e.g. brown shoes" aria-label="Name"><input class="qt" id="qt-${i.id}" data-qty="${i.id}" inputmode="numeric" value="${esc(i.qty ?? '')}" placeholder="Qty" aria-label="Quantity">` : `<div class="nmt ${i.name ? '' : 'none'}">${esc(i.name || 'No name')}${Number(i.qty) > 1 ? ` ×${esc(i.qty)}` : ''}</div>`}${isAdmin() ? `<button class="del" data-act="delItem" data-id="${i.id}" aria-label="Delete item ${numLabel(i)}" title="Delete">${ICON.trash}</button>` : ''}</div></div>`;
 }
@@ -167,7 +224,7 @@ function uploadPanel() {
   ${S.uqOpen || c('failed') ? `<ul class="uql">${S.uq.filter((u) => S.uqOpen || u.status === 'failed').map((u) => `<li class="uq-${u.status}"><span class="grow">${esc(u.name)}<br><small>${esc(u.status === 'failed' ? u.err || 'Failed' : label[u.status])}</small></span>${u.status === 'failed' ? `${u.file ? `<button class="btn sm" data-act="uqRetry" data-id="${u.id}">Retry</button>` : ''}<button class="btn sm" data-act="uqDrop" data-id="${u.id}">Remove</button>` : ''}</li>`).join('')}</ul>` : ''}</div>`;
 }
 function shownItems() {
-  const base = S.show === 'un' ? ungrouped() : S.show === 'todo' ? toSend() : visItems();
+  const base = S.show === 'un' ? ungrouped() : S.show === 'todo' ? toSend() : S.show === 'unchecked' ? visItems().filter((i) => !i.recv) : visItems();
   return base.filter(matchItem);
 }
 export { shownItems };
@@ -182,6 +239,8 @@ function vPhotos() {
   const all = visItems();
   if (all.length && un.length) h += `<div class="note bad"><span>${plural(un.length, 'item')} not in any group yet</span>${S.show !== 'un' ? '<button class="btn sm" data-act="show" data-v="un">Show them</button>' : ''}</div>`;
   if (all.length && !un.length) h += `<div class="note"><span>Every item is in a group.</span><button class="btn sm" data-act="tab" data-v="service">See by service</button></div>`;
+  const checked = all.filter((i) => i.recv).length, bad = all.filter((i) => i.recv === 'missing' || i.recv === 'damaged').length;
+  if (all.length && (checked || isDispatcher())) h += `<div class="note ${bad ? 'bad' : ''}"><span>Receive check: ${checked} of ${all.length} checked${bad ? `, ${bad} missing or damaged` : ''}</span>${checked < all.length && S.show !== 'unchecked' ? '<button class="btn sm" data-act="show" data-v="unchecked">Show unchecked</button>' : ''}</div>`;
   h += `<div class="tray" aria-label="Groups"><button class="gchip" data-drop="" data-act="noop"><span>Not in a group</span><b>${un.length}</b></button>${active().map((g) => `<button class="gchip" data-key="tray-${g.id}" data-drop="${g.id}" data-act="editGroup" data-id="${g.id}" style="--g:${gColor(g)}"><i></i><span><b class="pn">${esc(pLabel(g))}</b> ${esc(gTitle(g))}</span><b>${itemsIn(g.id).length}</b></button>`).join('')}${can('group') ? '<button class="gchip add" data-act="newGroupSel">+ New group</button>' : ''}</div>`;
   h += `<div class="board"><div><div class="toolbar"><div class="seg"><button class="${S.show === 'un' ? 'on' : ''}" data-act="show" data-v="un">Not grouped ${un.length}</button><button class="${S.show === 'todo' ? 'on' : ''}" data-act="show" data-v="todo">Still to send ${ts.length}</button><button class="${S.show === 'all' ? 'on' : ''}" data-act="show" data-v="all">All ${all.length}</button></div>${shown.length ? '<button class="btn sm" data-act="selAll">Select all shown</button>' : ''}${aiAllowed() && can('name') && all.some((i) => !i.name) ? '<button class="btn sm" data-act="aiNameAll" title="Send thumbnails to AI to suggest names">Name with AI</button>' : ''}</div>
  ${all.length > 12 ? searchBox('Search items, #number or group') : ''}
@@ -285,7 +344,7 @@ function selbar(on) {
   if (on && S.sel.size && S.tab !== 'service' && !layerCount()) {
     if (!sb) { sb = document.createElement('div'); sb.id = 'selbar'; sb.className = 'selbar'; document.body.appendChild(sb); }
     const grouped = [...S.sel].some((id) => groupById(S.items.find((i) => i.id === id)?.groupId));
-    sb.innerHTML = `<span class="grow">${S.sel.size} selected</span>${can('group') ? `<button class="btn sm primary" data-act="selToGroup">Add to group</button>${grouped ? '<button class="btn sm" data-act="selUngroup">Take out</button>' : ''}` : ''}${can('upload') && S.sel.size > 1 ? '<button class="btn sm" data-act="selCombine">Combine</button>' : ''}${aiAllowed() && can('name') ? '<button class="btn sm" data-act="aiNameSel">Name with AI</button>' : ''}${isAdmin() ? '<button class="btn sm danger" data-act="selDelete">Delete</button>' : ''}<button class="btn sm" data-act="selClear">Clear</button>`;
+    sb.innerHTML = `<span class="grow">${S.sel.size} selected</span>${can('group') ? `<button class="btn sm primary" data-act="selToGroup">Add to group</button>${grouped ? '<button class="btn sm" data-act="selUngroup">Take out</button>' : ''}` : ''}${can('upload') && S.sel.size > 1 ? '<button class="btn sm" data-act="selCombine">Combine</button>' : ''}${aiAllowed() && can('name') ? '<button class="btn sm" data-act="aiNameSel">Name with AI</button>' : ''}${can('send') ? '<button class="btn sm" data-act="selRecv" data-v="ok">Received</button><button class="btn sm" data-act="selRecv" data-v="missing">Missing</button>' : ''}${isAdmin() ? '<button class="btn sm danger" data-act="selDelete">Delete</button>' : ''}<button class="btn sm" data-act="selClear">Clear</button>`;
   } else if (sb) sb.remove();
 }
 export { CITIES, SERVICES, mainSvc };

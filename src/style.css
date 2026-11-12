@@ -29,7 +29,7 @@ p{margin:6px 0 12px}
 .tag-s{font-weight:600;font-size:14px;opacity:.75;white-space:nowrap}
 .face{border:1px solid rgba(255,255,255,.35);background:transparent;color:#fff;border-radius:999px;padding:6px 12px;font-weight:600;font-size:14px;white-space:nowrap}
 
-#tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-template-columns:repeat(3,1fr);background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
+#tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-template-columns:repeat(4,1fr);background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
 #tabs button{border:0;background:none;min-height:var(--tabs);font-weight:700;font-size:15px;color:var(--muted);position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px}
 #tabs button small{font-weight:600;font-size:12px}
 #tabs button.on{color:var(--ink)}
@@ -37,7 +37,7 @@ p{margin:6px 0 12px}
 #tabs .dot{position:absolute;top:6px;right:calc(50% - 46px);min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--stop);color:#fff;font-size:12px;line-height:20px}
 main#view{padding:12px 12px calc(var(--tabs) + 90px + env(safe-area-inset-bottom,0px));max-width:1280px;margin:0 auto}
 @media (min-width:900px){
-  #tabs{position:sticky;top:calc(var(--hdr) + env(safe-area-inset-top,0px));bottom:auto;border-top:0;border-bottom:1px solid var(--line);grid-template-columns:repeat(3,200px);justify-content:center;padding-bottom:0}
+  #tabs{position:sticky;top:calc(var(--hdr) + env(safe-area-inset-top,0px));bottom:auto;border-top:0;border-bottom:1px solid var(--line);grid-template-columns:repeat(4,170px);justify-content:center;padding-bottom:0}
   #tabs button{min-height:48px;flex-direction:row;gap:8px}
   #tabs button.on::before{top:auto;bottom:0;border-radius:3px 3px 0 0}
   #tabs .dot{position:static}
@@ -325,3 +325,13 @@ a.btn{text-decoration:none}
 .rel.hid{color:var(--muted)}
 .rel .btn{min-height:32px;padding:4px 10px}
 .pp-h{font-size:20px;margin:14px 0 2px}
+
+/* step 2: flight day */
+#tabs button{font-size:14px}
+.three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px}
+.bagrow{display:flex;align-items:center;gap:6px;padding:6px 0;border-top:1px solid var(--line);font-size:16px}
+.bagrow .btn{min-width:44px;min-height:44px;font-size:20px}
+.trip{margin-bottom:10px}
+.ph .recv{position:absolute;left:6px;top:30px;font-size:12px;font-weight:700;padding:2px 7px;border-radius:4px;color:#fff;background:var(--go)}
+.ph .recv.r-missing{background:var(--stop)}
+.ph .recv.r-damaged{background:#C75B12}

@@ -116,7 +116,7 @@ export async function verifyUser(request, env) {
       audience: sa.project_id,
     });
     if (!ROLES.includes(payload.role) || payload.env !== envOf(request) || !validId(payload.pid)) return null;
-    if (payload.viewAs) return { pid: payload.pid, role: payload.role, viewAs: true };
+    if (payload.viewAs) return { pid: payload.pid, role: payload.role, name: payload.name || '', viewAs: true };
     const prof = await getProf(request, env, payload.pid);
     if (!prof || prof.disabled) return null;
     // KV is the source of truth for the role, so a change takes effect at once.
@@ -128,7 +128,7 @@ export async function verifyUser(request, env) {
 
 /* ---------- Google OAuth for Identity Toolkit admin calls ---------- */
 let accessCache = null;
-async function accessToken(env) {
+export async function accessToken(env) {
   if (accessCache && accessCache.exp > Date.now() + 60000) return accessCache.tok;
   const sa = serviceAccount(env);
   const assertion = await new SignJWT({ scope: 'https://www.googleapis.com/auth/identitytoolkit https://www.googleapis.com/auth/cloud-platform' })
@@ -162,4 +162,59 @@ export async function revokeSessions(env, uid, disable, request) {
     const t = await r.text();
     if (!/USER_NOT_FOUND/.test(t)) throw new Error('accounts:update failed: ' + t.slice(0, 200));
   }
+}
+
+/* ---------- Firestore from the server (service account; rules do not apply) ----------
+   Used for pages of people who get no database access (passengers, clients) and for
+   timed releases. Paths are inside this request's data space: apps/<space>/… */
+function fsRoot(request, env) {
+  const sa = serviceAccount(env);
+  const emu = !!env.FIRESTORE_EMULATOR_HOST && emulator(request, env);
+  return { emu, url: `${emu ? 'http://' + env.FIRESTORE_EMULATOR_HOST : 'https://firestore.googleapis.com'}/v1/projects/${sa.project_id}/databases/(default)/documents/apps/${envOf(request)}` };
+}
+async function fsFetch(request, env, path, init = {}) {
+  const { emu, url } = fsRoot(request, env);
+  return fetch(url + path, { ...init, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + (emu ? 'owner' : await accessToken(env)) } });
+}
+function dec(v) {
+  if (v == null) return null;
+  if ('stringValue' in v) return v.stringValue;
+  if ('integerValue' in v) return Number(v.integerValue);
+  if ('doubleValue' in v) return v.doubleValue;
+  if ('booleanValue' in v) return v.booleanValue;
+  if ('nullValue' in v) return null;
+  if ('arrayValue' in v) return (v.arrayValue.values || []).map(dec);
+  if ('mapValue' in v) return decFields(v.mapValue.fields);
+  return null;
+}
+const decFields = (f = {}) => Object.fromEntries(Object.entries(f).map(([k, v]) => [k, dec(v)]));
+function enc(v) {
+  if (v === null || v === undefined) return { nullValue: null };
+  if (typeof v === 'boolean') return { booleanValue: v };
+  if (typeof v === 'number') return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+  if (Array.isArray(v)) return { arrayValue: { values: v.map(enc) } };
+  if (typeof v === 'object') return { mapValue: { fields: Object.fromEntries(Object.entries(v).map(([k, x]) => [k, enc(x)])) } };
+  return { stringValue: String(v) };
+}
+const docOf = (d) => ({ id: d.name.split('/').pop(), ...decFields(d.fields) });
+export async function fsGet(request, env, path) {
+  const r = await fsFetch(request, env, '/' + path);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error('database read failed: ' + r.status);
+  return docOf(await r.json());
+}
+export async function fsWhere(request, env, coll, field, value) {
+  const r = await fsFetch(request, env, ':runQuery', { method: 'POST', body: JSON.stringify({ structuredQuery: { from: [{ collectionId: coll }], where: { fieldFilter: { field: { fieldPath: field }, op: 'EQUAL', value: enc(value) } }, limit: 500 } }) });
+  if (!r.ok) throw new Error('database query failed: ' + r.status);
+  return (await r.json()).filter((x) => x.document).map((x) => docOf(x.document));
+}
+export async function fsPatch(request, env, path, data) {
+  const mask = Object.keys(data).map((k) => 'updateMask.fieldPaths=' + encodeURIComponent(k)).join('&');
+  const r = await fsFetch(request, env, `/${path}?${mask}&currentDocument.exists=true`, { method: 'PATCH', body: JSON.stringify({ fields: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, enc(v)])) }) });
+  if (!r.ok) throw new Error('database write failed: ' + r.status);
+}
+// Opens a passenger's contact when its time has come ("10 minutes before landing").
+export const tripDue = (t, nowMs = Date.now()) => !t.released && typeof t.dueAt === 'number' && t.dueAt > 0 && t.dueAt <= nowMs;
+export async function openTrip(request, env, t) {
+  await fsPatch(request, env, 'tripsPrivate/' + t.id, { released: true, rel: t.dids || [], relAt: Date.now(), relBy: 'timer' });
 }
