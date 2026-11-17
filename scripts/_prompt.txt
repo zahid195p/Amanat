@@ -1,0 +1,31 @@
+You read ONE delivery message for ONE parcel, copied from WhatsApp or WeChat by a courier dispatcher in Pakistan. It can be English, Roman Urdu or Urdu, in any order, with any line breaks. It is always ONE parcel, even when it lists two names or several phone numbers.
+Fields:
+- name: every receiver name exactly as written, joined the way it is written ("Khalid and Abuzar", "Jehanzeb & Waqas"). Keep spelling, initials and titles ("M. Hamza Aziz").
+- phone: the first phone number, exactly as written.
+- phone2: every other phone number, as written, separated by ", ". If a number is written next to a name, put the name in brackets after it: "0311-9923247 (Waqas)".
+- address: the full delivery address with every word kept: shop name, shop number, market, street, house, mohallah, landmark, "near ...", post code. Keep the original order and spelling, join lines with ", ". Remove only names, phone numbers and the service word. If the city is written inside the address, keep it there too.
+- city: the city or town of the address. It can be anywhere in the text, not only at the end, and can be two words ("Gujar Khan", "Mandi Bahauddin"). Use "" if none is written.
+- service: TCS, Leopards, Daewoo, Faisal Movers, InDrive, Yango, Bike, Cargo or Pickup. "divo", "devo", "daiwoo" mean Daewoo; "leopard" means Leopards; "faisal" means Faisal Movers; "pick up" or "collect" means Pickup. If more than one is written ("TCS/Leopard") keep all, in the written order, joined with " / ". "TCS ONLY" is TCS. Use "" if none.
+- note: everything else, such as "properly pack", "fragile", "whatsapp".
+Never invent or correct anything. Never drop words from the address. Leave a field "" when it is not in the message.
+
+Example message:
+Jehanzeb:0300-4443234 Waqas:0311-9923247
+MJ MOBILE
+Branch2 Peshawar Saddar Cantt. Muslim Market Shop # 30
+TCS
+Example answer:
+{"name":"Jehanzeb & Waqas","phone":"0300-4443234","phone2":"0311-9923247 (Waqas)","address":"MJ MOBILE, Branch2 Peshawar Saddar Cantt., Muslim Market Shop # 30","city":"Peshawar","service":"TCS","note":""}
+
+Example message:
+Wasu Road Near Chungi Number 8 /Old Ghega Flour Mills School Mohallah Mandi Bahauddin
+Post Code 50400
+Qasim Imtiaz
+03161749964
+TCS
+Example answer:
+{"name":"Qasim Imtiaz","phone":"03161749964","phone2":"","address":"Wasu Road Near Chungi Number 8 / Old Ghega Flour Mills School Mohallah, Mandi Bahauddin, Post Code 50400","city":"Mandi Bahauddin","service":"TCS","note":""}
+
+Reply with only one JSON object with exactly these keys: name, phone, phone2, address, city, service, note.
+Message:
+"""

@@ -1,0 +1,68 @@
+# Builds Amanat and deploys it to the TEST site (Cloudflare Pages project "amanat-test").
+# The live site (project "amanat", amanat.fazol.skin) is not touched by this workflow:
+# it keeps running version 1 until the switch is made on purpose.
+# Needs GitHub repo secrets: CLOUDFLARE_API_TOKEN, FIREBASE_SERVICE_ACCOUNT, GEMINI_API_KEY.
+name: Deploy
+on:
+  push:
+    branches: [main, claude/vibrant-lamport-73cbm9]
+  workflow_dispatch:
+concurrency: deploy
+env:
+  PROJECT: amanat-test
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - name: Check token
+        id: tok
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "::warning::Add the CLOUDFLARE_API_TOKEN repo secret to deploy."; echo "skip=1" >> $GITHUB_OUTPUT; fi
+      - uses: actions/checkout@v4
+        if: steps.tok.outputs.skip != '1'
+      - uses: actions/setup-node@v4
+        if: steps.tok.outputs.skip != '1'
+        with: { node-version: 22, cache: npm }
+      - name: Build
+        if: steps.tok.outputs.skip != '1'
+        run: npm ci && npm run build
+      - name: Publish database rules
+        if: steps.tok.outputs.skip != '1'
+        run: node scripts/deploy-rules.mjs
+      - name: Cloudflare project and KV
+        if: steps.tok.outputs.skip != '1'
+        run: |
+          set -e
+          ACC=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/accounts | jq -r '.result[0].id')
+          [ "$ACC" = "null" ] && { echo "Token cannot list accounts"; exit 1; }
+          echo "::add-mask::$ACC"; echo "CLOUDFLARE_ACCOUNT_ID=$ACC" >> $GITHUB_ENV
+          export CLOUDFLARE_ACCOUNT_ID=$ACC
+          KV=$(npx wrangler kv namespace list | jq -r '.[] | select(.title=="amanat") | .id')
+          [ -z "$KV" ] && { echo "KV namespace amanat is missing"; exit 1; }
+          npx wrangler pages project create $PROJECT --production-branch main 2>&1 | tail -2 || true
+          printf 'name = "%s"\npages_build_output_dir = "dist"\ncompatibility_date = "2025-09-01"\n\n[[kv_namespaces]]\nbinding = "AMANAT_KV"\nid = "%s"\n' "$PROJECT" "$KV" > wrangler.toml
+      - name: Copy secrets to Cloudflare
+        if: steps.tok.outputs.skip != '1'
+        run: |
+          set -e
+          for k in FIREBASE_SERVICE_ACCOUNT GEMINI_API_KEY; do
+            v="${!k}"; [ -z "$v" ] && { echo "$k not set, skipped"; continue; }
+            printf '%s' "$v" | npx wrangler pages secret put "$k" --project-name $PROJECT >/dev/null && echo "set $k"
+          done
+      - name: Deploy
+        if: steps.tok.outputs.skip != '1'
+        run: npx wrangler pages deploy dist --project-name $PROJECT --branch main --commit-dirty=true
+      - name: Smoke test
+        if: steps.tok.outputs.skip != '1'
+        run: |
+          SITE=https://$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$PROJECT | jq -r '.result.subdomain')
+          sleep 10
+          echo "Site: $SITE"
+          echo "home: $(curl -s -o /dev/null -w '%{http_code}' $SITE/)"
+          echo "setup: $(curl -s $SITE/api/setup)"
+          echo "bad link: $(curl -s -X POST -H 'content-type: application/json' $SITE/api/login -d '{"key":"ThisKeyDoesNotExist12345"}')"
+          echo "live site still v1: $(curl -s https://amanat.fazol.skin/api/setup)"
