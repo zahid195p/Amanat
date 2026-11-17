@@ -7,7 +7,7 @@ import '@fontsource/barlow-condensed/700.css';
 import './style.css';
 import {
   S, $, $$, now, plural, isAdmin, can, groupById, active, toSend, ungrouped, visItems, toast, closeSheet, closeTop, layerCount, ask, choose,
-  schedule, setRender, DRAG, initFirebase, auth, onAuthStateChanged, signInWithCustomToken, subscribeBase, SPACE, ROLE_LABEL, isStaff, setRelease, exitViewAs, addTrip, updTrip, setTripRelease, delTrip, gotBag, saveLanding, setTickApi, setOnMe, delExpense, upd, setRecv, tick,
+  schedule, setRender, DRAG, initFirebase, storageWorks, auth, onAuthStateChanged, signInWithCustomToken, subscribeBase, SPACE, ROLE_LABEL, isStaff, setRelease, exitViewAs, addTrip, updTrip, setTripRelease, delTrip, gotBag, saveLanding, setTickApi, setOnMe, setClientApi, setFlightDispatchers, delExpense, upd, setRecv, tick,
   unsubscribeAll, setFlight, saveLater, moveItems, combine, deleteItems, setDone, svcKey, lsSet, waitForPendingWrites, db, numberItems, put, now as tnow,
 } from './core.js';
 import { render, shownItems } from './views.js';
@@ -15,7 +15,7 @@ import { handleFiles, retryUpload, dropUpload, clearUploads } from './images.js'
 import { api } from './api.js';
 import {
   openGroupSheet, openPickGroup, openViewer, viewerOpen, viewerNav, openCounter, openFlights, createFlight, downloadMD, downloadCSV,
-  deleteFlight, archiveFlight, openActivity, backup, restore, openMenu, openPeople, showMyLink, switchProfile, clientEdit, clientSlip, openSlips, openExpense, openPhoto, openBulk, readShot, aiName, aiCheck,
+  deleteFlight, archiveFlight, openActivity, backup, restore, openMenu, openPeople, showMyLink, switchProfile, clientEdit, clientSlip, openClients, newPassenger, newDispatcher, fillDemo, openSlips, openExpense, openPhoto, openBulk, readShot, aiName, aiCheck,
   msgReceiver, copy,
 } from './sheets.js';
 
@@ -25,13 +25,18 @@ setRender(render);
 /* ---------- boot ---------- */
 // The private link looks like https://…/#k=<key>. The key is remembered on this device,
 // so next time only the code is asked.
+// Clients: the shared link is …/#c (phone + own code); a personal link is …/#p=<key>.
 function readKey() {
-  const m = /[#&?]k=([A-Za-z0-9_-]{10,60})/.exec(location.hash + location.search);
-  if (m) { lsSet('amanat4.key', m[1]); history.replaceState(null, '', location.pathname); }
+  const h = location.hash + location.search;
+  const pk = /[#&?]p=([A-Za-z0-9_-]{10,60})/.exec(h);
+  if (pk) { S.ckey = pk[1]; S.cmode = 'key'; history.replaceState(null, '', location.pathname); }
+  else if (/^#c$|[#&?]c(?:&|$)/.test(location.hash)) { S.cmode = 'phone'; history.replaceState(null, '', location.pathname); }
+  const m = /[#&?]k=([A-Za-z0-9_-]{10,60})/.exec(h);
+  if (m) { lsSet('amanat4.key', m[1]); S.cmode = ''; history.replaceState(null, '', location.pathname); }
   try { S.key = localStorage.getItem('amanat4.key') || ''; } catch (e) { S.key = m ? m[1] : ''; }
 }
-function boot() {
-  if (!initFirebase()) { render(); return; }
+async function boot() {
+  if (!initFirebase(await storageWorks())) { render(); return; }
   navigator.storage?.persist?.().catch(() => {});
   readKey();
   addEventListener('hashchange', () => { readKey(); if (!S.me) whoAmI(); });
@@ -66,10 +71,13 @@ let lastPortal = 0;
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.me?.role === 'client' && Date.now() - lastPortal > 120000) { lastPortal = Date.now(); loadPortal(); } });
 if (window.__t) window.__t.api = api;
 setTickApi((fid) => api('tick', { fid }));
+setClientApi((d) => api('people', d));
 setOnMe(() => loadPortal());
 // Before login: is this a fresh install (setup), and whose link is this?
 async function whoAmI() {
   S.who = null; S.loginErr = '';
+  if (S.cmode === 'key') { clientKeyLogin(); return; }
+  if (S.cmode === 'phone') { schedule(); return; }
   if (S.key) {
     try { S.who = await api('login', { key: S.key }, { authed: false }); }
     catch (e) { if (!e.offline) { S.loginErr = e.message; if (e.status === 404) { S.key = ''; lsSet('amanat4.key', null); } } else S.who = { name: '' }; }
@@ -78,20 +86,49 @@ async function whoAmI() {
   schedule();
 }
 
+/* ---------- client login ---------- */
+async function clientKeyLogin() {
+  S.loggingIn = true; schedule();
+  try { const { token } = await api('client', { action: 'key', key: S.ckey }, { authed: false }); await withTimeout(signInWithCustomToken(auth, token), 20000); S.cmode = ''; }
+  catch (e) { S.loginErr = e.offline ? 'No internet. Connect and open the link again.' : e.message; S.cmode = 'phone'; }
+  S.loggingIn = false; schedule();
+}
+async function clientStep() {
+  const phone = ($('#cl-phone')?.value || S.cphone || '').trim();
+  const code = ($('#cl-code')?.value || '').trim(), code2 = ($('#cl-code2')?.value || '').trim();
+  S.cphone = phone; S.loginErr = '';
+  if (S.cstate === 'new' && code !== code2) { S.loginErr = 'The two codes are not the same.'; schedule(); return; }
+  S.loggingIn = true; schedule();
+  try {
+    if (!S.cstate || S.cstate === 'off') { const r = await api('client', { action: 'lookup', phone }, { authed: false }); S.cstate = r.state; }
+    else {
+      const r = await api('client', { action: S.cstate === 'new' ? 'claim' : 'login', phone, code }, { authed: false });
+      if (r.token) { await withTimeout(signInWithCustomToken(auth, r.token), 20000); S.cmode = ''; S.cstate = ''; }
+      else if (r.state) S.cstate = r.state;
+    }
+  } catch (e) { S.loginErr = e.offline ? 'No internet. Connect and try again.' : e.message; }
+  S.loggingIn = false; schedule();
+  setTimeout(() => ($('#cl-code') || $('#cl-phone'))?.focus(), 50);
+}
+
 /* ---------- login & setup ---------- */
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('Opening took too long. Check the internet and try again. In a private tab, try a normal tab.')), ms))]);
 async function doLogin() {
   const code = ($('#pin-in')?.value || '').trim();
   if (!code) return;
   S.loggingIn = true; S.loginErr = ''; schedule();
   try {
     const { token } = await api('login', { key: S.key, code }, { authed: false });
-    await signInWithCustomToken(auth, token);
+    await withTimeout(signInWithCustomToken(auth, token), 20000);
     S.tab = 'photos'; S.show = null;
   } catch (e) { S.loginErr = e.offline ? 'No internet. The first login on a device needs internet.' : e.message; }
   S.loggingIn = false; schedule();
 }
 function useLink() {
   const v = ($('#link-in')?.value || '').trim();
+  const p = /p=([A-Za-z0-9_-]{10,60})/.exec(v);
+  if (p) { S.ckey = p[1]; S.cmode = 'key'; whoAmI(); return; }
+  if (/#c\b/.test(v)) { S.cmode = 'phone'; S.cstate = ''; schedule(); return; }
   const m = /k=([A-Za-z0-9_-]{10,60})/.exec(v) || /^([A-Za-z0-9_-]{10,60})$/.exec(v);
   if (!m) { S.loginErr = 'That does not look like an Amanat link.'; schedule(); return; }
   S.key = m[1]; lsSet('amanat4.key', S.key); whoAmI();
@@ -111,19 +148,35 @@ async function doSetup() {
 }
 
 /* ---------- actions ---------- */
+// Runs a slow action with its button disabled; errors are shown, never lost.
+async function busy(el, fn) {
+  if (el.disabled) return; el.disabled = true;
+  try { await fn(); } catch (e) { toast(e.message || String(e), { ms: 5000 }); }
+  el.disabled = false;
+}
 const sel = () => [...S.sel];
 const ACT = {
   noop: () => {},
   closeSheet: () => closeSheet(),
   tab: (el) => { S.tab = el.dataset.v; lsSet('amanat3.tab', S.tab); window.scrollTo(0, 0); schedule(); },
   useLink: () => useLink(),
+  clientStep: () => clientStep(),
+  clientStart: () => { S.cmode = 'phone'; S.cstate = ''; S.loginErr = ''; schedule(); },
+  clientBack: () => { S.cstate = ''; S.loginErr = ''; schedule(); },
   haveLink: () => { S.setup = null; schedule(); },
-  otherLink: () => { S.key = ''; S.who = null; lsSet('amanat4.key', null); whoAmI(); },
+  otherLink: () => { S.cmode = ''; S.key = ''; S.who = null; lsSet('amanat4.key', null); whoAmI(); },
   login: () => doLogin(),
   setup: () => doSetup(),
   menu: () => openMenu(),
   switchFace: () => switchProfile(),
   people: () => openPeople(),
+  goto: (el) => document.getElementById(el.dataset.v)?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
+  newPassenger: (el) => busy(el, () => newPassenger($('#np-name').value.trim(), $('#np-phone').value.trim())),
+  newDispatcher: (el) => busy(el, () => newDispatcher($('#nd-name').value.trim(), $('#nd-phone').value.trim())),
+  flDisp: (el) => busy(el, async () => { const f = S.flights.find((x) => x.id === S.fid); if (!f) return; if (!navigator.onLine) throw new Error('Changing dispatchers needs internet.'); const id = el.dataset.id; await setFlightDispatchers(f.id, (f.dids || []).includes(id) ? f.dids.filter((x) => x !== id) : [...(f.dids || []), id]); }),
+  demo: (el) => busy(el, () => fillDemo()),
+  clients: () => { closeSheet(); openClients(); },
+  myDetails: () => { if (S.portal?.me) clientEdit(S.portal.me, loadPortal); },
   saveLanding: () => saveLanding($('#fl-date').value, $('#fl-time').value),
   addTrip: () => { const p = S.people.find((x) => x.id === $('#fl-pass')?.value); if (p) addTrip(p); },
   tripRelease: (el) => setTripRelease(el.dataset.id, el.dataset.on === '1'),
@@ -136,7 +189,7 @@ const ACT = {
   addExpense: () => openExpense(),
   delExpense: async (el) => { if (await ask('Delete this expense?')) delExpense(el.dataset.id); },
   expPhoto: (el) => openPhoto('Receipt', el.dataset.id, 'receipts'),
-  clientEdit: (el) => { const p = S.portal?.parcels?.find((x) => x.id === el.dataset.id); if (p) clientEdit(p, loadPortal); },
+  clientEdit: () => { if (S.portal?.me) clientEdit(S.portal.me, loadPortal); },
   clientSlip: (el) => clientSlip(el.dataset.id),
   clientShow: (el) => { const g = groupById(el.dataset.id); if (g && isAdmin()) { upd('groups/' + g.id, { [el.dataset.k]: el.dataset.on === '1' }); toast(el.dataset.on === '1' ? 'Now visible to the client' : 'Hidden from the client'); } },
   cEditOk: (el) => upd('groups/' + el.dataset.id, { cEdit: null }),
@@ -226,6 +279,7 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape') { if (layerCount()) { closeTop(); return; } if (S.sel.size) { S.sel.clear(); schedule(); } return; }
   if (ev.key === 'Enter' && ev.target.id === 'pin-in') { ev.preventDefault(); doLogin(); return; }
   if (ev.key === 'Enter' && ev.target.id === 'link-in') { ev.preventDefault(); useLink(); return; }
+  if (ev.key === 'Enter' && /^cl-/.test(ev.target.id)) { ev.preventDefault(); clientStep(); return; }
   if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches?.('[data-tsel]')) { ev.preventDefault(); ev.target.click(); return; }
   if (typing(ev.target) || !S.me) return;
   if (viewerOpen() && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) { ev.preventDefault(); viewerNav(ev.key === 'ArrowLeft' ? -1 : 1); return; }

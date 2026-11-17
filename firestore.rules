@@ -93,7 +93,7 @@ service cloud.firestore {
         allow create: if bossW() || (dispW() && request.resource.data.fid is string
           && pid() in request.resource.data.dids && onFlight(request.resource.data.fid)
           && request.resource.data.get('groupId', '') == '');
-        allow update: if bossW() || (mine() && writer() && diff().hasOnly(['name', 'qty', 'note', 'photos', 'n', 'recv']));
+        allow update: if bossW() || (mine() && writer() && diff().hasOnly(['name', 'qty', 'note', 'photos', 'n', 'recv', 'groupId']));
         allow delete: if bossW();
       }
       // Full-size photos and booking slips are fetched one by one by id (ids are random).
@@ -109,16 +109,24 @@ service cloud.firestore {
         allow create, delete: if bossW() || dispW();
         allow update: if bossW();
       }
+      // A parcel. A dispatcher may make parcels on their own flights and sort items into them.
       match /groups/{id} {
         allow read: if boss() || mine();
-        allow create, delete: if bossW();
-        allow update: if bossW() || (mine() && writer()
-          && diff().hasOnly(['done', 'steps', 'tracking', 'receipt', 'packed', 'weight', 'charges']));
+        allow create: if bossW() || (dispW() && pid() in request.resource.data.dids && onFlight(request.resource.data.fid)
+          && request.resource.data.get('slipOk', false) == false && request.resource.data.get('pickOk', false) == false);
+        allow update: if bossW() || (mine() && writer() && !diff().hasAny(['fid', 'dids', 'slipOk', 'pickOk', 'by']));
+        allow delete: if bossW() || (mine() && writer() && resource.data.get('by', '') == pid());
       }
-      // Receiver name, phones and address. "rel" lists the dispatchers it is released to.
+      // The client's name, phones and address for this parcel. "rel" lists the dispatchers who may
+      // see it: shared by the owner, or the dispatcher who typed it in.
       match /groupsPrivate/{id} {
         allow read: if boss() || (disp() && pid() in resource.data.rel);
-        allow write: if bossW();
+        allow create: if bossW() || (dispW() && pid() in request.resource.data.dids && onFlight(request.resource.data.fid)
+          && request.resource.data.rel == [pid()] && request.resource.data.released == false);
+        allow update: if bossW() || (disp() && writer() && pid() in resource.data.rel
+          && diff().hasOnly(['name', 'phone', 'phone2', 'address', 'raw', 'cid']));
+        allow delete: if bossW() || (disp() && writer() && pid() in resource.data.rel
+          && get(/databases/$(database)/documents/apps/$(space)/groups/$(id)).data.get('by', '') == pid());
       }
       // One document per passenger on a flight: bag counts (open to the flight's dispatchers)…
       match /trips/{id} {

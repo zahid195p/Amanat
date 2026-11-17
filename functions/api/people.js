@@ -5,8 +5,13 @@
 //   update {pid, name?, disabled?}
 //   viewAs {pid}               -> {token}              read-only login as that person
 //   myCode {code}                                      anyone: change my own code
+// Clients (stored only in the database):
+//   clientLink  {pid, oldKey?} -> {key}                 personal link (no code needed), signs out the old one
+//   clientReset {pid}                                   forget their code; they choose a new one, everyone is signed out
+//   clientEnsure {name, phone, …} -> {cid}              dispatcher or owner: find the client by phone, or add them
 // Only the developer can create or change a developer or an owner.
-import { json, fail, body, validId, validCode, hashCode, verifyUser, getProf, putProf, kvKey, randomId, randomPin, tokenFor, uidOf, revokeSessions, ROLES } from '../../server/lib.js';
+import { json, fail, body, validId, validCode, hashCode, verifyUser, getProf, putProf, kvKey, randomId, randomPin, tokenFor, uidOf, revokeSessions, ROLES, fsGet, fsPatch, fsCreate, findClientByPhone } from '../../server/lib.js';
+import { phoneKey } from '../../src/parse.js';
 
 export async function onRequestPost({ request, env }) {
   const me = await verifyUser(request, env);
@@ -20,7 +25,35 @@ export async function onRequestPost({ request, env }) {
     await kv.put(kvKey(request, 'code:' + me.pid), JSON.stringify(await hashCode(b.code)));
     return json({ ok: true });
   }
+  if (b.action === 'clientEnsure') {
+    if (!me.staff) return fail(403, 'Not allowed.');
+    const pk = phoneKey(b.phone);
+    if (!pk) return json({ cid: '' });
+    const found = await findClientByPhone(request, env, pk);
+    if (found) return json({ cid: found.id });
+    const t = (v, n) => String(v ?? '').replace(/[\u0000-\u001f]+/g, ' ').trim().slice(0, n);
+    const cid = randomId(12);
+    await fsCreate(request, env, 'people', cid, { role: 'client', name: t(b.name, 80), phone: t(b.phone, 30), pk, phone2: t(b.phone2, 80), address: t(b.address, 400), city: t(b.city, 60), service: t(b.service, 60), note: '', key: '', codeSet: false, sharedOff: false, disabled: false, since: 0, at: Date.now(), by: me.pid });
+    return json({ cid, created: true });
+  }
   if (!me.boss) return fail(403, 'Only the owner can manage people.');
+  if (['clientLink', 'clientReset', 'viewAs'].includes(b.action) && validId(b.pid)) {
+    const c = await fsGet(request, env, 'people/' + b.pid);
+    if (c?.role === 'client') {
+      if (b.action === 'viewAs') return json({ token: await tokenFor(request, env, b.pid, { role: 'client', name: c.name || '' }, { viewAs: true }), role: 'client', name: c.name });
+      const since = Date.now();
+      if (b.action === 'clientReset') {
+        await kv.delete(kvKey(request, 'ccode:' + b.pid)); await kv.delete(kvKey(request, 'clock:' + b.pid));
+        await fsPatch(request, env, 'people/' + b.pid, { codeSet: false, since });
+        return json({ ok: true });
+      }
+      if (c.key) await kv.delete(kvKey(request, 'clink:' + c.key));
+      const key = randomId(28);
+      await kv.put(kvKey(request, 'clink:' + key), b.pid);
+      await fsPatch(request, env, 'people/' + b.pid, { key, since });
+      return json({ key });
+    }
+  }
   const high = (role) => role === 'dev' || role === 'owner';
 
   if (b.action === 'create') {

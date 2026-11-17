@@ -21,7 +21,7 @@ export const PROFILE_COLORS = ['#2D6FC7', '#1E8757', '#C3362B', '#8440A8', '#C75
 export const STEPS = [['arrived', 'Arrived'], ['packed', 'Packed'], ['booked', 'Booked'], ['sent', 'Sent'], ['delivered', 'Delivered']];
 export const ROLE_LABEL = { dev: 'Developer', owner: 'Owner', dispatcher: 'Dispatcher', client: 'Client', passenger: 'Passenger' };
 // What a dispatcher may do. The owner and developer may do everything.
-const DISPATCHER_CAN = { upload: true, name: true, send: true, ai: true };
+const DISPATCHER_CAN = { upload: true, name: true, send: true, ai: true, group: true };
 // Receiver details live in a separate locked document (groupsPrivate) until the owner releases them.
 export const PRIVATE_FIELDS = ['name', 'phone', 'phone2', 'address', 'raw'];
 // Also in the locked document: the client this parcel belongs to, and what that client may see.
@@ -57,7 +57,7 @@ export const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export const rid = () => Date.now().toString(36) + Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => (b % 36).toString(36)).join('');
 export const now = () => Date.now();
-export const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+export const plural = (n, w) => `${n} ${w}${n === 1 ? '' : /(s|sh|ch|x)$/.test(w) ? 'es' : 's'}`;
 export const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) { /* ignore */ } };
 export const todayISO = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
 export function fmtDate(d) { if (!d) return ''; const x = new Date(d + 'T00:00:00'); return isNaN(x) ? d : x.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); }
@@ -212,11 +212,23 @@ export function schedule() {
 /* ---------- Firebase ---------- */
 export let db = null, auth = null;
 const EMU = import.meta.env.VITE_EMULATORS === '1';
-export function initFirebase() {
+// Private tabs (and some in-app browsers) block the on-device database. The app then still
+// works, but keeps nothing after the tab is closed.
+export async function storageWorks() {
+  try {
+    if (!('indexedDB' in window)) return false;
+    return await Promise.race([
+      new Promise((res) => { const r = indexedDB.open('amanat-probe'); r.onsuccess = () => { try { r.result.close(); } catch (e) { /* ignore */ } res(true); }; r.onerror = () => res(false); r.onblocked = () => res(false); }),
+      new Promise((res) => setTimeout(() => res(false), 2500)),
+    ]);
+  } catch (e) { return false; }
+}
+export function initFirebase(persist = true) {
   if (!S.configured && !EMU) return false;
+  S.noStore = !persist;
   const app = initializeApp(EMU ? { apiKey: 'demo', projectId: 'demo-amanat', appId: 'demo' } : firebaseConfig);
-  db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager(), cacheSizeBytes: CACHE_SIZE_UNLIMITED }) });
-  auth = initializeAuth(app, { persistence: [indexedDBLocalPersistence, browserLocalPersistence] });
+  db = initializeFirestore(app, { localCache: persist ? persistentLocalCache({ tabManager: persistentMultipleTabManager(), cacheSizeBytes: CACHE_SIZE_UNLIMITED }) : memoryLocalCache() });
+  auth = initializeAuth(app, { persistence: persist ? [indexedDBLocalPersistence, browserLocalPersistence] : [browserLocalPersistence, inMemoryPersistence] });
   if (EMU) { useEmulators(db, auth); S.configured = true; }
   main = { db, auth };
   return true;
@@ -289,7 +301,8 @@ export const put = (path, data) => {
   if (!isGroup(path)) return w(setDoc(D(path), data), 'set ' + path);
   const [pub, priv] = splitGroup(data);
   w(setDoc(D(path), pub), 'set ' + path);
-  w(setDoc(D('groupsPrivate/' + path.slice(7)), { fid: pub.fid, dids: pub.dids || [], released: false, rel: [], ...priv }), 'set private ' + path);
+  // A parcel a dispatcher types in is visible to that dispatcher; the owner shares the rest.
+  w(setDoc(D('groupsPrivate/' + path.slice(7)), { fid: pub.fid, dids: pub.dids || [], released: false, rel: isDispatcher() ? [S.me.uid] : [], ...priv }), 'set private ' + path);
 };
 export const del = (path) => {
   if (viewing()) return;
@@ -395,7 +408,7 @@ function mergeGroups() {
     if (!p) return { ...g, locked: true };
     const o = { ...g, released: !!p.released, _pending: g._pending || p._pending };
     for (const k of PRIVATE_FIELDS) o[k] = p[k] ?? '';
-    o.cid = p.cid || ''; o.slipOk = !!p.slipOk; o.pickOk = !!p.pickOk;
+    o.cid = p.cid || ''; o.slipOk = !!p.slipOk; o.pickOk = !!p.pickOk; o.typedBy = !p.released && (p.rel || []).length ? p.rel[0] : '';
     return o;
   }).sort((a, b) => (a.pn || 1e9) - (b.pn || 1e9) || (a.at || 0) - (b.at || 0));
   countPending(); schedule();
@@ -451,33 +464,63 @@ export function newGroup(data, assignIds = []) {
   S.gBump = (S.gBump || 0) + 1; setTimeout(() => (S.gBump = 0), 3000);
   const id = rid();
   const ptmp = S.groups.reduce((m, g) => Math.max(m, g.pn || 0, g.ptmp || 0), 0) + 1 + (S.gBump - 1);
+  const cid = data.cid !== undefined ? data.cid : ensureClient(clean, id);
   put('groups/' + id, {
-    fid: S.fid, dids: curFlight()?.dids || [], ci, pn: null, ptmp, ...clean, cid: data.cid || '', raw: data.raw || '', done: false, at: now(), by: S.me.uid,
+    fid: S.fid, dids: curFlight()?.dids || [], ci, pn: null, ptmp, ...clean, cid: cid || '', raw: data.raw || '', done: false, at: now(), by: S.me.uid,
     aiPending: !!data.aiPending, tracking: '', weight: null, charges: null,
     steps: { arrived: { at: now(), by: S.me.uid } }, packed: {},
   });
-  saveBook(clean);
-  logEv(`made group ${clean.name || '(no name)'}`);
+  logEv(`made parcel for ${clean.name || '(no name)'}`);
   if (assignIds.length) moveItems(assignIds, id, true);
   return id;
 }
+/* ---------- clients ----------
+   A client is a person a parcel goes to, kept across flights with their phone and address.
+   Clients are made from the addresses that are pasted or typed: the phone number decides
+   whether it is someone already known. Nobody has to be added by hand first. */
+export const clientList = () => S.people.filter((p) => p.role === 'client' && !p.gone);
+export const clientByPhone = (phone) => { const k = phoneKey(phone); return k ? clientList().find((c) => c.pk === k || phoneKey(c.phone) === k) || null : null; };
+// Returns the client id now (owner, works offline) or links it a moment later (dispatcher, online).
+export function ensureClient(d, gid) {
+  const k = phoneKey(d.phone);
+  if (!k || S.me.viewAs) return '';
+  if (isAdmin()) {
+    const c = clientByPhone(d.phone);
+    if (c) { const fill = {}; for (const f of ['name', 'phone2', 'address', 'city', 'service']) if (d[f] && !c[f]) fill[f] = d[f]; if (Object.keys(fill).length) w(updateDoc(D('people/' + c.id), fill), 'client'); return c.id; }
+    const id = rid();
+    const rec = { role: 'client', name: d.name || '', phone: d.phone, pk: k, phone2: d.phone2 || '', address: d.address || '', city: d.city || '', service: d.service || '', note: '', key: '', codeSet: false, sharedOff: false, disabled: false, since: 0, at: now(), by: S.me.uid };
+    S.people = [...S.people, { id, ...rec }]; // so the next pasted address with this phone finds it at once
+    w(setDoc(D('people/' + id), rec), 'client');
+    return id;
+  }
+  if (isDispatcher() && navigator.onLine && gid) {
+    clientApi({ action: 'clientEnsure', ...d }).then((r) => { if (r?.cid) w(updateDoc(D('groupsPrivate/' + gid), { cid: r.cid }), 'client'); }).catch(() => {});
+  }
+  return '';
+}
+// The owner changed a parcel's details: the client keeps them for next time.
 export function saveBook(d) {
-  const k = phoneKey(d.phone); if (!k || !isAdmin() || S.me.viewAs) return;
-  const rec = { at: now() }; for (const f of ['name', 'phone', 'phone2', 'address', 'city', 'service']) if (d[f]) rec[f] = d[f];
-  w(setDoc(D('book/' + k), rec, { merge: true }), 'book');
+  if (!isAdmin() || S.me.viewAs) return;
+  const c = (d.cid && S.people.find((p) => p.id === d.cid)) || clientByPhone(d.phone);
+  if (!c) return;
+  const patch = {}; for (const f of ['name', 'phone', 'phone2', 'address', 'city', 'service']) if (d[f] && d[f] !== c[f]) patch[f] = d[f];
+  if (patch.phone) patch.pk = phoneKey(patch.phone);
+  if (Object.keys(patch).length) w(updateDoc(D('people/' + c.id), patch), 'client');
 }
 export async function lookupBook(phone) {
-  const k = phoneKey(phone); if (!k || !isAdmin()) return null;
-  try { const s = await getDoc(D('book/' + k)); return s.exists() ? s.data() : null; } catch (e) { return null; }
+  if (!isAdmin()) return null;
+  return clientByPhone(phone);
 }
+let clientApi = async () => null;
+export const setClientApi = (fn) => (clientApi = fn);
 export function moveItems(ids, gid, quiet) {
   const before = ids.map((id) => [id, S.items.find((i) => i.id === id)?.groupId || '']);
   ids.forEach((id) => upd('items/' + id, { groupId: gid || '' }));
   S.sel.clear(); schedule();
   const g = groupById(gid);
   const nums = ids.map((id) => S.items.find((i) => i.id === id)).filter(Boolean).map(numLabel).join(', ');
-  logEv(gid ? `moved ${nums} to ${gLabel(g)}` : `took ${nums} out of its group`);
-  if (!quiet) toast(`${plural(ids.length, 'item')} ${gid ? 'added to ' + gLabel(g) : 'taken out of its group'}`, {
+  logEv(gid ? `moved ${nums} to ${gLabel(g)}` : `took ${nums} out of its parcel`);
+  if (!quiet) toast(`${plural(ids.length, 'item')} ${gid ? 'added to ' + gLabel(g) : 'taken out of its parcel'}`, {
     undo: () => { before.forEach(([id, old]) => upd('items/' + id, { groupId: old })); logEv(`undid moving ${nums}`); },
   });
 }
@@ -490,7 +533,7 @@ export async function combine(ids, targetGroup) {
   const gids = [...new Set(its.map((i) => i.groupId).filter((g) => groupById(g)))];
   let gid = gids[0] || '';
   if (targetGroup === undefined && gids.length > 1) {
-    gid = await choose('Which group?', 'These items are in different groups. Which group should the combined item go to?', [
+    gid = await choose('Which parcel?', 'These items are in different parcels. Which parcel should the combined item go to?', [
       ...gids.map((g) => ({ label: gLabel(groupById(g)), v: g })), { label: 'No group', v: '__none' }]);
     if (!gid) return; if (gid === '__none') gid = '';
   }
@@ -547,7 +590,7 @@ export function setRelease(gids, on) {
   const gs = gids.map(groupById).filter(Boolean);
   gs.forEach((g) => w(updateDoc(D('groupsPrivate/' + g.id), { released: on, rel: on ? dids : [], relAt: on ? now() : null, relBy: on ? S.me.uid : null }), 'release'));
   logEv(`${on ? 'released' : 'hid'} receiver details: ${gs.map(pLabel).join(', ')}`);
-  toast(on ? `${plural(gs.length, 'receiver')} now visible to the dispatcher` : `${plural(gs.length, 'receiver')} hidden from the dispatcher`);
+  toast(on ? `${plural(gs.length, 'address')} shared with the dispatcher` : `Stopped sharing ${plural(gs.length, 'address')}`);
 }
 // Put dispatchers on a flight. Every item and parcel of the flight carries the same list,
 // because the database rules check it on each document.

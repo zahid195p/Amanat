@@ -117,6 +117,12 @@ export async function verifyUser(request, env) {
     });
     if (!ROLES.includes(payload.role) || payload.env !== envOf(request) || !validId(payload.pid)) return null;
     if (payload.viewAs) return { pid: payload.pid, role: payload.role, name: payload.name || '', viewAs: true };
+    // Clients live only in the database (they are made from pasted addresses, often offline).
+    if (payload.role === 'client') {
+      const c = await fsGet(request, env, 'people/' + payload.pid);
+      if (!c || c.role !== 'client' || c.disabled || (c.since || 0) > (payload.since || 0)) return null;
+      return { pid: payload.pid, role: 'client', name: c.name || '', boss: false, staff: false };
+    }
     const prof = await getProf(request, env, payload.pid);
     if (!prof || prof.disabled) return null;
     // KV is the source of truth for the role, so a change takes effect at once.
@@ -237,4 +243,27 @@ export async function fsWhereIn(request, env, coll, field, values) {
     out.push(...(await r.json()).filter((x) => x.document).map((x) => docOf(x.document)));
   }
   return out;
+}
+
+/* ---------- clients: one shared link (phone + own code) or a personal link ---------- */
+export async function findClientByPhone(request, env, pk) {
+  if (!pk) return null;
+  const cs = (await fsWhere(request, env, 'people', 'pk', pk)).filter((c) => c.role === 'client' && !c.disabled);
+  return cs.sort((a, b) => (a.at || 0) - (b.at || 0))[0] || null;
+}
+export async function clientToken(request, env, c) {
+  return mintCustomToken(env, uidOf(request, c.id), { env: envOf(request), pid: c.id, role: 'client', name: c.name || '', since: c.since || 0 });
+}
+export async function fsCreate(request, env, coll, id, data) {
+  const r = await fsFetch(request, env, `/${coll}?documentId=${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ fields: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, enc(v)])) }) });
+  if (!r.ok) throw new Error('database write failed: ' + r.status);
+}
+// Simple per-address limit for pages anyone can open (the shared client link).
+export async function rateOk(request, env, what, max, perSec) {
+  const ip = request.headers.get('cf-connecting-ip') || 'local';
+  const k = kvKey(request, `rate:${what}:${ip}`);
+  const n = Number(await env.AMANAT_KV.get(k)) || 0;
+  if (n >= max) return false;
+  await env.AMANAT_KV.put(k, String(n + 1), { expirationTtl: perSec });
+  return true;
 }

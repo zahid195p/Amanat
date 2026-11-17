@@ -35,6 +35,14 @@ async function addPerson(page, name, role, phone = '') {
   await page.waitForFunction(() => !document.querySelector('#cp-text'));
   return r;
 }
+// A client opens the one shared link, types the phone number and (first time) chooses a code.
+async function clientIn(page, phone, code, first) {
+  await page.goto(URL + '#c'); await page.waitForSelector('#cl-phone');
+  await page.fill('#cl-phone', phone); await page.click('[data-act=clientStep]');
+  await page.waitForSelector('#cl-code');
+  await page.fill('#cl-code', code); if (first) await page.fill('#cl-code2', code);
+  await page.click('[data-act=clientStep]');
+}
 async function login(page, key, pin) {
   await page.goto(URL + '#k=' + key);
   await page.waitForSelector('#pin-in');
@@ -61,9 +69,7 @@ const owner = await addPerson(a, 'Tayyab bhai', 'owner');
 ok(/#k=/.test(owner.text) && /Code: \d{6}/.test(owner.text), 'invite has a private link and a 6-digit code');
 const d1 = await addPerson(a, 'Bilal', 'dispatcher', '0333 5556667');
 const d2 = await addPerson(a, 'Other City', 'dispatcher');
-const cl = await addPerson(a, 'Abdullah', 'client');
 const pa = await addPerson(a, 'Hamza', 'passenger', '0301 9998887');
-const cl2 = await addPerson(a, 'Other Client', 'client');
 await a.keyboard.press('Escape'); await a.keyboard.press('Escape');
 
 /* ---------- 3. owner logs in with link + code and prepares a flight ---------- */
@@ -91,7 +97,7 @@ await o.click('#gs-read');
 ok(await until(o, () => document.querySelector('#gs-phone')?.value === '03161749964' && document.querySelector('#gs-city')?.value === 'Mandi Bahauddin', null, 1500), 'address fills in instantly');
 await o.click('#gs-save');
 ok(await until(o, () => document.querySelector('.gpanel .pno')?.textContent === 'P1' && /Qasim Imtiaz/.test(document.querySelector('.gpanel').innerText)), 'parcel P1 made for Qasim');
-ok(await until(o, () => /Hidden from dispatcher/.test(document.querySelector('.gpanel').innerText)), 'new parcel starts hidden from the dispatcher');
+ok(await until(o, () => /not shared with dispatcher/.test(document.querySelector('.gpanel').innerText)), 'new parcel: address not shared with the dispatcher');
 // second parcel
 await o.click('[data-act=tab][data-v=groups]'); await o.click('[data-act=newGroupSel]');
 await o.fill('#gs-raw', 'Sana Bibi\n0345 1234567\nHouse 5 Gulberg III Lahore\nDaewoo'); await o.click('#gs-read'); await wait(300); await o.click('#gs-save');
@@ -113,7 +119,7 @@ ok(await until(b, () => document.querySelectorAll('.parcel').length === 2), 'dis
 let bt = await text(b);
 ok(/P1/.test(bt) && /TCS/.test(bt) && /Mandi Bahauddin/.test(bt), 'dispatcher sees parcel number, service and city');
 ok(!/Qasim|0316|Wasu Road|Sana|0345|Gulberg/.test(bt), 'receiver name, phone and address are NOT on the dispatcher screen');
-ok(/not released yet/.test(bt), 'dispatcher is told the details are not released yet');
+ok(/has not shared this address yet/.test(bt), 'dispatcher is told the address is not shared yet');
 const ids = await b.evaluate(() => window.__t.ids());
 const direct = await b.evaluate(async (g) => ({
   priv: await window.__t.get('groupsPrivate/' + g),
@@ -121,14 +127,14 @@ const direct = await b.evaluate(async (g) => ({
   people: await window.__t.list('people'),
   book: await window.__t.list('book'),
   delItem: await window.__t.del('items/' + window.__t.ids().items[0]),
-  regroup: await window.__t.upd('items/' + window.__t.ids().items[0], { groupId: 'x' }),
   flight: await window.__t.upd('flights/' + window.__t.ids().fid, { label: 'hacked' }),
-  svc: await window.__t.upd('groups/' + g, { service: 'x' }),
+  svc: await window.__t.upd('groups/' + g, { dids: [] }),
+  slip: await window.__t.upd('groupsPrivate/' + g, { slipOk: true }),
 }), ids.groups[0]);
 ok(direct.priv === 'permission-denied' && direct.privList === 'permission-denied', 'going around the app: receiver details are refused by the database (' + direct.priv + ')');
 ok(direct.people === 'permission-denied' && direct.book === 'permission-denied', 'going around the app: people list and address book refused');
-ok(direct.delItem === 'permission-denied' && direct.regroup === 'permission-denied', 'going around the app: dispatcher cannot delete or regroup items');
-ok(direct.flight === 'permission-denied' && direct.svc === 'permission-denied', 'going around the app: dispatcher cannot change the flight or a parcel\'s service');
+ok(direct.delItem === 'permission-denied', 'going around the app: dispatcher cannot delete items');
+ok(direct.flight === 'permission-denied' && direct.svc === 'permission-denied' && direct.slip === 'permission-denied', 'going around the app: dispatcher cannot change the flight, who sees a parcel, or show slips to clients');
 ok(await b.evaluate(() => !document.querySelector('.del') && document.documentElement.scrollWidth <= 375), 'no delete buttons; fits a 375px phone');
 
 /* ---------- 5. a dispatcher who is not on the flight sees nothing ---------- */
@@ -156,6 +162,14 @@ await o.click('[data-key="sec-TCS"] [data-act=release]');
 ok(await until(b, () => !/Qasim/.test(document.body.innerText), null, 15000), 'owner hides it again: gone from the dispatcher screen');
 await o.click('[data-act=releaseSvc][data-v=Daewoo]');
 ok(await until(b, () => /Sana Bibi/.test(document.body.innerText), null, 15000), '"Show all Daewoo to dispatcher" releases that courier\'s parcels');
+
+/* ---------- 6a. a dispatcher adds an address and sorts an item ---------- */
+await b.click('[data-act=tab][data-v=photos]'); await b.click('[data-act=show][data-v=un]');
+await b.click('.card:nth-child(1) .ph'); await b.click('#selbar [data-act=selToGroup]'); await b.click('[data-pg=__new]');
+await b.fill('#gs-raw', 'Imran Shah\n0312 3456789\nKhyber Bazaar Shop 4 Peshawar\nDaewoo'); await b.click('#gs-read'); await wait(400); await b.click('#gs-save');
+ok(await until(b, () => /Imran Shah/.test(document.body.innerText) && /Khyber Bazaar/.test(document.body.innerText) || (document.querySelector('[data-act=tab][data-v=groups]')?.click(), false), null, 15000), 'dispatcher makes a parcel himself and sees the address he typed');
+ok(await until(o, () => (document.querySelector('[data-act=tab][data-v=groups]')?.click(), /Added by Bilal/.test(document.body.innerText) && /Imran Shah/.test(document.body.innerText)), null, 15000), 'owner sees it, marked as added by the dispatcher');
+await o.click('[data-act=tab][data-v=service]'); await b.click('[data-act=tab][data-v=service]');
 
 /* ---------- 6b. flight day: passenger, bags, timed release ---------- */
 await o.evaluate(() => { window.__noTick = true; }); // so the server timer (the dispatcher's path) is what opens it
@@ -200,6 +214,7 @@ await o.screenshot({ path: `${shots}/o-flight.png` }); await b.screenshot({ path
 await P.close();
 // receive check
 await b.click('[data-act=tab][data-v=photos]'); await b.click('[data-act=show][data-v=all]');
+await until(b, () => document.querySelectorAll('.card').length === 4);
 await b.click('.card:nth-child(1) .ph'); await b.click('#selbar [data-act=selRecv][data-v=ok]');
 await b.click('.card:nth-child(2) .ph'); await b.click('#selbar [data-act=selRecv][data-v=missing]');
 await o.click('[data-act=tab][data-v=photos]'); await o.click('[data-act=show][data-v=all]');
@@ -211,31 +226,39 @@ await o.click('[data-act=tab][data-v=photos]'); await o.click('[data-act=show][d
 await o.fill('.card:nth-child(1) .nm', 'seed packet'); await o.fill('.card:nth-child(1) .qt', '3'); await wait(900);
 await o.click('[data-act=tab][data-v=service]');
 await o.click('[data-key="sec-TCS"] [data-act=editGroup]');
-await o.selectOption('#gs-cid', { label: 'Abdullah' }); await o.fill('#gs-tracking', 'TRK123');
+ok(await until(o, () => /Client: Qasim Imtiaz \(known from before\)/.test(document.querySelector('#gs-client')?.textContent || '')), 'the parcel made from a pasted address is a client already');
+await o.fill('#gs-tracking', 'TRK123');
 const [fc] = await Promise.all([o.waitForEvent('filechooser'), o.click('[data-rnew]')]);
 await fc.setFiles(`${IMG}/p8.jpg`);
 ok(await until(o, () => !!document.querySelector('.rthumb'), null, 15000), 'owner adds a booking slip photo');
 await o.click('#gs-save');
-ok(await until(o, () => /Client: Abdullah/.test(document.body.innerText) && /Slip and tracking hidden from client/.test(document.body.innerText)), 'parcel linked to client Abdullah; slip starts hidden from him');
+ok(await until(o, () => /Client: Qasim Imtiaz/.test(document.body.innerText) && /Slip and tracking hidden from client/.test(document.body.innerText)), 'parcel shows its client; slip starts hidden from him');
+// the one shared client link
+await o.click('[data-act=menu]'); await o.click('[data-act=clients]');
+ok(await until(o, () => /One link for all clients/.test(document.body.innerText) && /Qasim Imtiaz/.test(document.body.innerText) && /Sana Bibi/.test(document.body.innerText) && /has not opened the link yet/.test(document.body.innerText)), 'Clients list: made automatically from the parcels, nobody added by hand');
+ok(await o.evaluate(() => /wa\.me\/\?text=.*%23c/.test(document.querySelector('.box a.wa')?.href || '')), 'one shared client link with a WhatsApp button');
+await o.keyboard.press('Escape');
 const [K, k] = await open(375, 760, true);
-await login(k, cl.key, cl.pin);
-ok(await until(k, () => /Hello Abdullah/.test(document.body.innerText) && /PK 853/.test(document.body.innerText) && /Wasu Road/.test(document.body.innerText), null, 15000), 'client sees his parcel with its address');
+await k.goto(URL + '#c'); await k.waitForSelector('#cl-phone');
+await k.fill('#cl-phone', '0399 0000000'); await k.click('[data-act=clientStep]');
+ok(await until(k, () => /not on our list/.test(document.querySelector('#login-err')?.textContent || '')), 'shared link: an unknown number is refused, nothing else is shown');
+await clientIn(k, '0316-1749964', '4455', true);
+ok(await until(k, () => /Hello Qasim Imtiaz/.test(document.body.innerText) && /PK 853/.test(document.body.innerText) && /Wasu Road/.test(document.body.innerText), null, 15000), 'shared link: client types his phone, chooses a code, sees his parcel');
 let kt = await text(k);
-ok(/seed packet ×3/.test(kt) && /Your items so far/.test(kt) && k.locator('.cit img').count().then((n) => n === 2), 'client sees his items with photos and the running total');
-ok(!/Sana|Gulberg|Bilal|Hamza|0333|0301|Tayyab|TRK123/.test(kt), 'client sees no other client, no dispatcher, no passenger, and no slip yet');
+ok(/seed packet ×3/.test(kt) && /Your items so far/.test(kt) && /My delivery details/.test(kt), 'client sees his items, the running total and his delivery details');
+ok(!/Sana|Gulberg|Bilal|Hamza|0333|0301|Tayyab|TRK123|issing/.test(kt), 'client sees no other client, no dispatcher, no passenger, no "missing", and no slip yet');
 ok(await k.evaluate(() => document.documentElement.scrollWidth <= 375), 'client page fits a 375px phone');
 const kd = await k.evaluate(async (i) => ({
-  db: [await window.__t.get('flights/' + i.fid), await window.__t.list('items'), await window.__t.get('groupsPrivate/' + i.groups[0])],
-  other: await window.__t.api('portal', { action: 'address', id: i.groups[1], address: 'hack' }).then(() => 'ok', (e) => e.message),
+  db: [await window.__t.get('flights/' + i.fid), await window.__t.list('items'), await window.__t.get('groupsPrivate/' + i.groups[0]), await window.__t.list('people')],
+  other: await window.__t.api('portal?slip=' + i.groups[1]).then(() => 'ok', (e) => e.message),
   slip: await window.__t.api('portal?slip=' + i.groups[0]).then(() => 'ok', (e) => e.message),
 }), ids);
-ok(kd.db.every((r) => r === 'permission-denied'), 'client login: database refuses everything directly');
-ok(/Unknown parcel/.test(kd.other), 'client cannot change another client\'s parcel (' + kd.other + ')');
-ok(/No slip/.test(kd.slip), 'client cannot fetch the slip before it is released');
-// client corrects the address
-await k.click('[data-act=clientEdit]'); await k.fill('#ce-address', 'New Street 9, Model Town'); await k.click('[data-svc=Daewoo]'); await k.click('#ce-save');
+ok(kd.db.every((r) => r === 'permission-denied'), 'client login: database refuses everything directly, including the client list');
+ok(/No slip/.test(kd.other) && /No slip/.test(kd.slip), 'client cannot fetch another client\'s slip, or his own before it is released');
+// client corrects his details, AI-free paste fills the boxes
+await k.click('[data-act=myDetails]'); await k.fill('#ce-address', 'New Street 9, Model Town'); await k.click('[data-svc=Daewoo]'); await k.click('#ce-save');
 ok(await until(k, () => /New Street 9/.test(document.body.innerText) && /TCS \/ Leopards \/ Daewoo/.test(document.body.innerText), null, 15000), 'client changes address and service on his own page');
-ok(await until(o, () => /New Street 9/.test(document.body.innerText) && /changed the delivery details/.test(document.body.innerText), null, 15000), 'owner sees the new address, flagged as changed by the client');
+ok(await until(o, () => /New Street 9/.test(document.body.innerText) && /changed the delivery details/.test(document.body.innerText), null, 15000), 'owner sees the new address on the parcel, flagged as changed by the client');
 await o.click('[data-act=cEditOk]');
 // release the slip
 await o.click('[data-act=clientShow][data-k=slipOk]');
@@ -244,18 +267,46 @@ ok(await until(k, () => /TRK123/.test(document.body.innerText) && !!document.que
 await k.click('[data-act=clientSlip]');
 ok(await until(k, () => (document.querySelector('#ph-img')?.src || '').startsWith('data:image/jpeg'), null, 15000), 'client opens the full slip photo');
 await k.goBack();
-// once sent, the address is locked for the client
 await o.click('[data-key="sec-TCS"] .parcel .pk');
 await wait(1500); await k.click('[data-act=portalReload]');
-ok(await until(k, () => /Sent/.test(document.querySelector('.cparcel .svc')?.textContent || '') && !document.querySelector('[data-act=clientEdit]'), null, 15000), 'when sent: client sees "Sent" and can no longer change the address');
+ok(await until(k, () => /Sent/.test(document.querySelector('.cparcel .svc')?.textContent || ''), null, 15000), 'when sent: client sees "Sent"');
 await o.click('#toasts .undo');
-ok(await until(o, () => document.querySelectorAll('.parcel:not(.done)').length === 2, null, 15000), 'owner undoes the test "sent"');
+ok(await until(o, () => document.querySelectorAll('.parcel:not(.done)').length === 3, null, 15000), 'owner undoes the test "sent"');
 await k.screenshot({ path: `${shots}/k-client.png`, fullPage: true });
 await K.close();
+// same phone on a new device: the code is asked; another client sees only her own
 const [K2, k2] = await open(375, 760, true);
-await login(k2, cl2.key, cl2.pin);
-ok(await until(k2, () => /no parcels yet/.test(document.body.innerText), null, 15000), 'a different client sees none of this');
+await clientIn(k2, '03161749964', '0000', false);
+ok(await until(k2, () => /not right/.test(document.querySelector('#login-err')?.textContent || '')), 'second device: a wrong code is refused');
+await k2.fill('#cl-code', '4455'); await k2.click('[data-act=clientStep]');
+ok(await until(k2, () => /Hello Qasim Imtiaz/.test(document.body.innerText), null, 15000), 'second device: the right code opens it');
 await K2.close();
+const [K3, k3] = await open(375, 760, true);
+await clientIn(k3, '0345 1234567', '7788', true);
+ok(await until(k3, () => /Hello Sana Bibi/.test(document.body.innerText) && /Gulberg/.test(document.body.innerText), null, 15000) && !/Qasim|Wasu|New Street/.test(await text(k3)), 'another client sees only her own parcel');
+await K3.close();
+// personal link fallback, and the owner closing the shared link for one client
+await o.click('[data-act=menu]'); await o.click('[data-act=clients]');
+ok(await until(o, () => /Qasim Imtiaz[\s\S]*has opened the link/.test(document.body.innerText)), 'owner sees that Qasim has opened the link');
+await o.click('[data-key^="cl-"]:has-text("Qasim") [data-cl]');
+await o.click('#mc-link');
+await o.waitForSelector('#cp-text[data-key]');
+const ckey = await o.evaluate(() => document.querySelector('#cp-text').dataset.key);
+ok(await o.evaluate(() => /#p=/.test(document.querySelector('#cp-text').value) && !!document.querySelector('#cp-btn') && /wa\.me\/923161749964\?text=/.test(document.querySelector('#sheets .sheet-wrap:last-child a.wa').href)), 'personal link: message with Copy and a WhatsApp button straight to the client');
+await o.keyboard.press('Escape'); await o.keyboard.press('Escape'); await o.waitForFunction(() => !document.querySelector('#sheets .sheet-wrap'));
+await o.click('[data-act=menu]'); await o.click('[data-act=clients]');
+await o.click('[data-key^="cl-"]:has-text("Qasim") [data-cl]');
+await o.uncheck('#mc-shared');
+await o.click('#mc-reset'); await o.click('[data-ch="1"]');
+ok(await until(o, () => /Code reset/.test(document.querySelector('#toasts').innerText)), 'owner resets the client\'s code');
+await o.keyboard.press('Escape'); await o.keyboard.press('Escape');
+const [K4, k4] = await open(375, 760, true);
+await k4.goto(URL + '#c'); await k4.waitForSelector('#cl-phone'); await k4.fill('#cl-phone', '03161749964'); await k4.click('[data-act=clientStep]');
+ok(await until(k4, () => /use the private link/.test(document.body.innerText)), 'shared link turned off for this client: he is told to use his private link');
+await k4.goto(URL + '#p=' + ckey);
+ok(await until(k4, () => /Hello Qasim Imtiaz/.test(document.body.innerText) && /New Street 9/.test(document.body.innerText), null, 15000), 'his personal link opens his page straight away');
+await K4.close();
+await o.click('[data-act=tab][data-v=service]');
 
 /* ---------- 6d. many slips at once, and expenses ---------- */
 const [fc2] = await Promise.all([b.waitForEvent('filechooser'), b.click('[data-act=slips]')]);
@@ -287,16 +338,16 @@ await a.click('[data-act=menu]'); await a.click('[data-act=people]');
 await a.click('.prow:has-text("Bilal") [data-pp]'); await a.click('#mp-view');
 ok(await until(a, () => /Viewing as Bilal/.test(document.body.innerText), null, 15000), 'view-as banner shows');
 await a.click('[data-act=tab][data-v=service]').catch(() => {});
-ok(await until(a, () => /Sana Bibi/.test(document.body.innerText) && document.querySelectorAll('.parcel').length === 2, null, 15000), 'view-as shows what Bilal sees (released parcel)');
+ok(await until(a, () => /Sana Bibi/.test(document.body.innerText) && document.querySelectorAll('.parcel').length === 3, null, 15000), 'view-as shows what Bilal sees (released parcel)');
 ok(!/Qasim|0316/.test(await text(a)), 'view-as hides what Bilal cannot see');
 const vw = await a.evaluate(async (i) => [await window.__t.get('groupsPrivate/' + i.groups[0]), await window.__t.upd('groups/' + i.groups[0], { done: true })], ids);
 ok(vw[0] === 'permission-denied' && vw[1] === 'permission-denied', 'view-as is read-only and bound by the same rules');
 await a.click('[data-act=exitView]');
 ok(await until(a, () => !/Viewing as/.test(document.body.innerText) && /Qasim Imtiaz/.test(document.body.innerText) || (document.querySelector('[data-act=tab][data-v=service]')?.click(), false), null, 15000), 'stop viewing: back to the full developer view');
 // view as a client: placeholder page, nothing from the database
-await a.click('[data-act=menu]'); await a.click('[data-act=people]');
-await a.click('.prow:has-text("Abdullah") [data-pp]'); await a.click('#mp-view');
-ok(await until(a, () => /Viewing as Abdullah/.test(document.body.innerText) && /New Street 9/.test(document.body.innerText) && !/Sana/.test(document.body.innerText), null, 15000), 'view as the client shows his page');
+await a.click('[data-act=menu]'); await a.click('[data-act=clients]');
+await a.click('[data-key^="cl-"]:has-text("Qasim") [data-cl]'); await a.click('#mc-view');
+ok(await until(a, () => /Viewing as Qasim Imtiaz/.test(document.body.innerText) && /New Street 9/.test(document.body.innerText) && !/Sana/.test(document.body.innerText), null, 15000), 'view as the client shows his page');
 const cv = await a.evaluate(async (i) => [await window.__t.get('flights/' + i.fid), await window.__t.list('items'), await window.__t.get('groupsPrivate/' + i.groups[0])], ids);
 ok(cv.every((r) => r === 'permission-denied'), 'a client login can read nothing from the database');
 await a.click('[data-act=exitView]');
@@ -319,7 +370,7 @@ ok(await until(o, () => /Ali Khan/.test(document.body.innerText), null, 20000), 
 await o.screenshot({ path: `${shots}/o-offline.png` });
 await O.setOffline(false); await o.evaluate(() => window.dispatchEvent(new Event('online')));
 ok(await until(o, () => /Online/.test(document.querySelector('#hdr').innerText), null, 40000), 'back online: synced');
-ok(await until(o, () => { const p = [...document.querySelectorAll('.gcard .pno')].map((x) => x.textContent); return p.length === 3 && !p.some((t) => t.includes('~')) && new Set(p).size === 3; }, null, 25000), 'offline parcel got a real, unique number');
+ok(await until(o, () => { const p = [...document.querySelectorAll('.gcard .pno')].map((x) => x.textContent); return p.length === 4 && !p.some((t) => t.includes('~')) && new Set(p).size === 4; }, null, 25000), 'offline parcel got a real, unique number');
 await b.click('[data-act=tab][data-v=photos]'); await b.click('[data-act=show][data-v=all]');
 ok(await until(b, () => document.querySelectorAll('.card').length === 6, null, 25000), 'offline photos reach the dispatcher');
 await until(b, () => ![...document.querySelectorAll('.card .num')].some((x) => x.textContent.includes('~')), null, 25000);
@@ -345,10 +396,10 @@ ok(await until(y, () => /turned off/.test(document.body.innerText)), 'a turned-o
 await y.goto(URL + '#k=ThisKeyDoesNotExist12345');
 ok(await until(y, () => /not valid/.test(document.body.innerText)), 'an unknown link is refused');
 // lockout
-await y.goto(URL + '#k=' + cl.key); await y.waitForSelector('#pin-in');
+await y.goto(URL + '#k=' + pa.key); await y.waitForSelector('#pin-in');
 for (let k = 0; k < 5; k++) { await y.fill('#pin-in', '11111' + k); await y.click('[data-act=login]'); await wait(350); }
 ok(await until(y, () => /Locked for 10 minutes|Too many wrong codes/.test(document.querySelector('#login-err')?.textContent || '')), '5 wrong codes lock the link for 10 minutes');
-await y.fill('#pin-in', cl.pin); await y.click('[data-act=login]');
+await y.fill('#pin-in', pa.pin); await y.click('[data-act=login]');
 ok(await until(y, () => /Too many wrong codes/.test(document.querySelector('#login-err')?.textContent || '')), 'even the right code is refused while locked');
 
 await o.screenshot({ path: `${shots}/o-desktop.png` });

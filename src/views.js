@@ -35,7 +35,7 @@ export function render() {
   const tb = $('#tabs'); tb.hidden = !on;
   if (on) {
     const un = ungrouped().length;
-    tb.innerHTML = [['flight', 'Flight'], ['photos', 'Photos'], ['groups', 'Groups'], ['service', 'By service']].map(([k, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-act="tab" data-v="${k}">${l}${k === 'photos' && un && S.items.length ? `<span class="dot" title="Not in a group">${un}</span>` : ''}</button>`).join('');
+    tb.innerHTML = [['flight', 'Flight'], ['photos', 'Items'], ['groups', 'Parcels'], ['service', 'Send']].map(([k, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-act="tab" data-v="${k}">${l}${k === 'photos' && un && S.items.length ? `<span class="dot" title="Not in a parcel">${un}</span>` : ''}</button>`).join('');
   }
   selbar(on);
   refreshOpenLayers();
@@ -69,7 +69,7 @@ function view() {
 }
 function staffView() {
   if (!S.flightsLoaded) return '<div class="spin" aria-label="Loading"></div>';
-  if (!curFlight()) return `<div class="empty narrow"><h2>No flight yet</h2>${can('flights') ? '<p>Add the flight first. Photos and groups are kept per flight.</p><button class="btn primary" data-act="flights">Add a flight</button>' : '<p>You are not on any flight right now. It appears here when the owner adds you to one.</p>'}</div>`;
+  if (!curFlight()) return `<div class="empty narrow"><h2>No flight yet</h2>${can('flights') ? '<p>Add the flight first. Items and parcels are kept per flight.</p><button class="btn primary" data-act="flights">Add a flight</button>' : '<p>You are not on any flight right now. It appears here when the owner adds you to one.</p>'}</div>`;
   if (curFlight().deleting) return `<div class="empty narrow"><h2>This flight is being deleted</h2><p>${isAdmin() ? '<button class="btn danger" data-act="resumeDelete">Finish deleting</button>' : 'Pick another flight.'}</p><button class="btn" data-act="flights">Flights</button></div>`;
   let h = installHint();
   if (S.tab === 'flight') h += vFlight();
@@ -87,7 +87,21 @@ function installHint() {
 }
 
 /* ---------- login & setup ---------- */
+function vClientLogin() {
+  const st = S.cstate;
+  const err = `<div class="status err" id="login-err">${esc(S.loginErr || '')}</div>`;
+  const busy = S.loggingIn ? 'disabled' : '';
+  if (S.cmode === 'key' && !S.loginErr) return '<div class="spin" aria-label="Loading"></div>';
+  let h = '<div class="faces"><h1 style="font-size:32px">Your parcels</h1>';
+  if (!st) h += `<p>Type the phone number Tayyab has for you.</p><label class="fld"><span>Phone number</span><input id="cl-phone" type="tel" inputmode="tel" autocomplete="tel" value="${esc(S.cphone || '')}" placeholder="0300 1234567"></label><button class="btn primary wide" data-act="clientStep" ${busy}>${S.loggingIn ? 'Checking…' : 'Continue'}</button>`;
+  else if (st === 'new') h += `<p>First time on this phone number. Choose a 4-digit code. You need it only if you open this on another phone.</p><label class="fld"><span>Choose a 4-digit code</span><input id="cl-code" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password"></label><label class="fld"><span>Type it again</span><input id="cl-code2" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password"></label><button class="btn primary wide" data-act="clientStep" ${busy}>${S.loggingIn ? 'Opening…' : 'Open my parcels'}</button>`;
+  else if (st === 'code') h += `<p>Type your 4-digit code. If you forgot it, ask Tayyab to reset it.</p><label class="fld"><span>Your code</span><input id="cl-code" type="password" inputmode="numeric" maxlength="4" autocomplete="current-password"></label><button class="btn primary wide" data-act="clientStep" ${busy}>${S.loggingIn ? 'Opening…' : 'Open my parcels'}</button>`;
+  else if (st === 'off') h += '<p>For this number, please use the private link Tayyab sent you.</p>';
+  h += err + (st ? '<button class="btn sm" data-act="clientBack">Use a different number</button>' : '') + '</div>';
+  return h;
+}
 function vLogin() {
+  if (S.cmode) return vClientLogin();
   if (S.key && S.who) {
     return `<div class="faces"><h1 style="font-size:32px">${S.who.name ? 'Hello ' + esc(S.who.name) : 'Welcome back'}</h1>
     <form class="pin" onsubmit="return false"><input id="pin-in" type="password" inputmode="text" autocomplete="current-password" placeholder="Your code" aria-label="Your code"><button class="btn primary" data-act="login" ${S.loggingIn ? 'disabled' : ''}>${S.loggingIn ? 'Opening…' : 'Open'}</button></form>
@@ -98,7 +112,8 @@ function vLogin() {
   if (S.key && !S.loginErr) return '<div class="spin" aria-label="Loading"></div>';
   return `<div class="faces"><h1 style="font-size:32px">Open your private link</h1><p>Amanat opens with the private link that was sent to you. If you have it, paste it here.</p>
   <div class="pin"><input id="link-in" autocomplete="off" placeholder="Paste your link" aria-label="Your private link"><button class="btn primary" data-act="useLink">Continue</button></div>
-  <div class="status err" id="login-err">${esc(S.loginErr || '')}</div></div>`;
+  <div class="status err" id="login-err">${esc(S.loginErr || '')}</div>
+  <p style="margin-top:18px">Waiting for a parcel? <button class="btn sm" data-act="clientStart">Open with my phone number</button></p></div>`;
 }
 function vSetup() {
   const c = S.setup?.configured;
@@ -135,7 +150,8 @@ function tripHint(t, f) {
 function vFlight() {
   const f = curFlight(); const boss = isAdmin(); const ts = S.trips;
   const sum = (k) => ts.reduce((a, t) => a + (Number(t[k]) || 0), 0);
-  let h = `<div class="box" data-key="fl-head"><h2 style="font-size:28px">${esc(f.label || 'Flight')}</h2>`;
+  let h = boss ? flightSteps(f) : '';
+  h += `<div class="box" data-key="fl-head"><h2 style="font-size:28px">${esc(f.label || 'Flight')}</h2>`;
   if (boss) h += `<div class="two" style="margin-top:8px"><label class="fld"><span>Date</span><input id="fl-date" type="date" value="${esc(f.date || '')}"></label><label class="fld"><span>Landing time (Pakistan time)</span><input id="fl-time" type="time" value="${esc(timeOfPk(f.landAt))}"></label></div><button class="btn" data-act="saveLanding">Save date and time</button>`;
   h += `<p style="margin:8px 0 0;font-weight:600">${f.landAt ? `Lands ${esc(fmtLanding(f.landAt))}, ${esc(fmtIn(f.landAt))}` : esc(fmtDate(f.date)) + (boss ? '' : '. The landing time is not set yet.')}</p></div>`;
   h += `<div class="dgrid"><div><b>${ts.length}</b>passenger${ts.length === 1 ? '' : 's'}</div><div><b>${sum('checked')}</b>checked bags</div><div><b>${sum('hand')}</b>hand carries</div>${sum('weight') ? `<div><b>${+sum('weight').toFixed(1)}</b>kg</div>` : ''}<div><b>${sum('gotChecked') + sum('gotHand')}</b>collected</div></div>`;
@@ -160,8 +176,17 @@ function vFlight() {
   h += expensesBox(boss);
   if (boss) {
     const free = S.people.filter((p) => p.role === 'passenger' && !p.disabled && !ts.some((t) => t.pid === p.id));
-    h += `<div class="box" data-key="fl-add"><b>Add a passenger to this flight</b>${free.length ? `<div class="row" style="margin-top:8px"><select id="fl-pass" class="grow" style="width:auto">${free.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select><button class="btn primary" data-act="addTrip">Add</button></div>` : '<p class="dim" style="margin-bottom:0">Add the person first in Menu, People and links, with the role Passenger.</p>'}
-    <p class="dim" style="font-size:13px;margin-bottom:0">Dispatchers on this flight see how many passengers and bags are coming. They see who the passenger is only after the release. Choose the dispatchers in Flights (tap the flight name at the top).</p></div>`;
+    h += `<div class="box" data-key="fl-add" id="fl-add"><b>Add a passenger</b>
+    <div class="two" style="margin-top:8px"><label class="fld"><span>Name</span><input id="np-name" autocomplete="off"></label><label class="fld"><span>Phone</span><input id="np-phone" type="tel" inputmode="tel"></label></div>
+    <button class="btn primary" data-act="newPassenger">Add passenger</button>
+    ${free.length ? `<div class="row" style="margin-top:10px"><span class="dim">Or someone from before:</span><select id="fl-pass" class="grow" style="width:auto">${free.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select><button class="btn" data-act="addTrip">Add</button></div>` : ''}</div>`;
+    const ds = S.people.filter((p) => p.role === 'dispatcher' && !p.disabled);
+    h += `<div class="box" data-key="fl-disp" id="fl-disp"><b>Dispatchers on this flight</b>
+    <p class="dim" style="font-size:14px;margin:4px 0 8px">They see the flight time, the bags and the items. They see a client's address only when you share it.</p>
+    ${ds.length ? `<div class="chips">${ds.map((p) => `<button class="chip ${(f.dids || []).includes(p.id) ? 'on' : ''}" data-act="flDisp" data-id="${p.id}">${esc(p.name)}</button>`).join('')}</div>` : ''}
+    <div class="two" style="margin-top:10px"><label class="fld"><span>New dispatcher name</span><input id="nd-name" autocomplete="off"></label><label class="fld"><span>Phone</span><input id="nd-phone" type="tel" inputmode="tel"></label></div>
+    <button class="btn" data-act="newDispatcher">Add dispatcher</button></div>`;
+    if (SPACE === 'test') h += '<div class="box" data-key="fl-demo"><b>Test site only</b><p class="dim" style="font-size:14px;margin:4px 0 8px">Fill a new example flight with a passenger, a dispatcher, clients, items and parcels, so you can try everything.</p><button class="btn" data-act="demo">Fill with demo data</button></div>';
   }
   return h;
 }
@@ -174,6 +199,24 @@ function expensesBox(boss) {
   return `<div class="box" data-key="fl-exp"><div class="row"><b class="grow">${boss ? 'Expenses' : 'My expenses'} · ${rs(total)}</b><button class="btn sm primary" data-act="addExpense">Add expense</button></div>
   ${boss && (courier || total) ? `<div class="dim" style="font-size:14px;margin-top:4px">${Object.entries(cats).map(([k, v]) => `${esc(k)} ${rs(v)}`).join(' · ')}${courier ? `${total ? ' · ' : ''}Courier charges on parcels ${rs(courier)}` : ''}. <b>All together ${rs(total + courier)}</b></div>` : ''}
   ${es.map((e) => `<div class="prow" data-key="ex-${e.id}">${e.receipt?.t ? `<img class="rthumb sm" src="${safeImg(e.receipt.t)}" alt="Receipt" data-act="expPhoto" data-id="${esc(e.receipt.p)}">` : ''}<span class="grow"><b>${rs(Number(e.amount) || 0)}</b> ${esc(e.cat || '')}${e.note ? ' · ' + esc(e.note) : ''}${pendingBadge(e._pending)}<br><span class="dim" style="font-size:13px">${boss && e.byName ? esc(e.byName) + ' · ' : ''}${esc(fmtDate(new Date((e.at || 0) + 5 * 3600000).toISOString().slice(0, 10)))}</span></span>${boss || e.by === S.me.uid ? `<button class="btn sm danger" data-act="delExpense" data-id="${e.id}" aria-label="Delete expense">${ICON.trash}</button>` : ''}</div>`).join('') || '<p class="dim" style="margin-bottom:0">Rides, packing and other costs for this flight. Courier charges are entered on each parcel.</p>'}</div>`;
+}
+
+// The owner's to-do list for this flight. The first step not done is marked as next.
+function flightSteps(f) {
+  const its = visItems(), gs = S.groups, open = gs.filter((g) => !g.done);
+  const un = ungrouped().length, noAddr = gs.filter((g) => !g.locked && !g.address).length;
+  const clients = new Set(gs.map((g) => g.cid).filter(Boolean)); const opened = [...clients].filter((id) => S.people.find((p) => p.id === id)?.codeSet).length;
+  const shared = open.filter((g) => g.released).length, slips = gs.filter((g) => g.receipt || g.tracking).length;
+  const steps = [
+    { done: !!(f.landAt && S.trips.length), t: 'Flight and passenger', d: `${f.landAt ? 'Lands ' + fmtClock(f.landAt) : 'No landing time yet'} · ${plural(S.trips.length, 'passenger')}`, act: 'goto', v: 'fl-add' },
+    { done: its.length > 0, t: 'Items', d: plural(its.length, 'photo'), act: 'tab', v: 'photos' },
+    { done: its.length > 0 && !un && gs.length > 0, t: 'Who gets what', d: gs.length ? `${plural(gs.length, 'parcel')}${un ? ` · ${un} item${un === 1 ? '' : 's'} not in a parcel` : ''}` : 'Paste the addresses to make the parcels', act: 'tab', v: 'groups' },
+    { done: clients.size > 0 && !noAddr, t: 'Client addresses', d: clients.size ? `${opened} of ${clients.size} clients opened the link${noAddr ? ` · ${noAddr} with no address` : ''}` : 'Clients come from the parcels', act: 'clients' },
+    { done: (f.dids || []).length > 0 && open.length > 0 && shared === open.length, t: 'Share with dispatcher', d: (f.dids || []).length ? `${shared} of ${open.length} addresses shared` : 'No dispatcher on this flight yet', act: (f.dids || []).length ? 'tab' : 'goto', v: (f.dids || []).length ? 'service' : 'fl-disp' },
+    { done: gs.length > 0 && slips === gs.length, t: 'Slips', d: `${slips} of ${gs.length}`, act: 'tab', v: 'service' },
+  ];
+  const next = steps.findIndex((x) => !x.done);
+  return `<div class="steplist" data-key="fl-steps">${steps.map((x, k) => `<button class="stepi ${x.done ? 'done' : ''} ${k === next ? 'now' : ''}" data-act="${x.act}" data-v="${x.v || ''}"><span class="sn">${x.done ? '✓' : k + 1}</span><span class="grow"><b>${x.t}</b><small>${esc(x.d)}</small></span></button>`).join('')}</div>`;
 }
 
 /* ---------- the passenger's own page ---------- */
@@ -196,21 +239,22 @@ function vClient() {
   const p = S.portal;
   if (!p) return '<div class="spin" aria-label="Loading"></div>';
   if (p.error) return `<div class="empty narrow"><h2>Hello ${esc(S.me.name)}</h2><p>${esc(p.error)}</p><button class="btn" data-act="portalReload">Try again</button></div>`;
-  const ps = p.parcels || [];
-  if (!ps.length) return `<div class="empty narrow"><h2>Hello ${esc(S.me.name)}</h2><p>You have no parcels yet. They appear here when they are on a flight.</p><button class="btn" data-act="portalReload">Refresh</button></div>`;
+  const ps = p.parcels || []; const me = p.me || {};
+  const mine = `<div class="box ${me.address ? '' : 'needs'}" data-key="c-me"><div class="row"><b class="grow">My delivery details</b><button class="btn sm ${me.address ? '' : 'primary'}" data-act="myDetails">${me.address ? 'Change' : 'Add my address'}</button></div>
+   ${me.address ? `<div class="caddr" style="border:0;padding:0;margin:6px 0 0">${esc(me.name || '')}${me.phone ? ' · ' + esc(fmtPhone(me.phone)) : ''}<br>${esc([me.address, me.city].filter(Boolean).join(', '))}<br><span class="dim">Send by: ${esc(me.service || 'not chosen yet')}</span></div>` : '<p class="warn" style="margin:6px 0 0">We do not have your address yet. Please add it so we can send your parcels.</p>'}</div>`;
+  if (!ps.length) return `<div class="cpage"><h1 style="font-size:30px">Hello ${esc(S.me.name)}</h1>${mine}<p class="dim">You have no parcels yet. They appear here when they are on a flight.</p><button class="btn" data-act="portalReload">Refresh</button></div>`;
   // Things that come over several flights (15 seed packets, a few per flight): running totals.
   const tot = new Map();
   for (const x of ps) for (const i of x.items) { const k = i.name.trim().toLowerCase(); if (!k) continue; const t = tot.get(k) || { name: i.name.trim(), got: 0, sent: 0 }; t.got += i.qty; if (x.status === 'sent' || x.status === 'delivered') t.sent += i.qty; tot.set(k, t); }
   const rows = [...tot.values()].filter((t) => t.got > 1).sort((a, b) => b.got - a.got);
-  let h = `<div class="cpage"><h1 style="font-size:30px">Hello ${esc(S.me.name)}</h1>`;
+  let h = `<div class="cpage"><h1 style="font-size:30px">Hello ${esc(S.me.name)}</h1>${mine}`;
   if (rows.length) h += `<div class="box" data-key="c-tot"><b>Your items so far</b><table class="dtab"><tr><th>Item</th><th>Arrived</th><th>Sent to you</th></tr>${rows.map((t) => `<tr><td>${esc(t.name)}</td><td>${t.got}</td><td>${t.sent}</td></tr>`).join('')}</table></div>`;
   h += ps.map((x) => {
     const tu = x.slip?.tracking ? trackUrl({ tracking: x.slip.tracking, service: x.service }) : '';
     return `<div class="gcard cparcel st-${esc(x.status)}" data-key="cp-${esc(x.id)}" style="--g:${x.status === 'sent' || x.status === 'delivered' ? 'var(--go)' : 'var(--sign)'}">
     <div class="gc-top"><span class="gc-name">${esc(x.flight.label)} <span class="dim" style="font-size:15px;font-family:var(--f-body)">${esc(fmtDate(x.flight.date))}</span></span><span class="svc">${esc(C_STATUS[x.status] || '')}</span></div>
-    ${x.items.length ? `<div class="citems">${x.items.map((i) => `<div class="cit">${i.t ? `<img src="${safeImg(i.t)}" alt="" loading="lazy">` : '<span class="noimg"></span>'}<span>${esc(i.name || 'Item')}${i.qty > 1 ? ' ×' + i.qty : ''}${i.recv === 'missing' ? ' <b class="warn">missing</b>' : i.recv === 'damaged' ? ' <b class="warn">damaged</b>' : ''}</span></div>`).join('')}</div>` : '<p class="dim">The items are not listed yet.</p>'}
+    ${x.items.length ? `<div class="citems">${x.items.map((i) => `<div class="cit">${i.t ? `<img src="${safeImg(i.t)}" alt="" loading="lazy">` : '<span class="noimg"></span>'}<span>${esc(i.name || 'Item')}${i.qty > 1 ? ' ×' + i.qty : ''}</span></div>`).join('')}</div>` : '<p class="dim">The items are not listed yet.</p>'}
     <div class="caddr"><b>${esc(x.name || 'No name yet')}</b>${x.phone ? ' · ' + esc(fmtPhone(x.phone)) : ''}<br>${esc([x.address, x.city].filter(Boolean).join(', ') || 'No address yet')}<br><span class="dim">Send by: ${esc(x.service || 'not chosen yet')}</span></div>
-    ${x.canEdit ? `<button class="btn sm" data-act="clientEdit" data-id="${esc(x.id)}">Change address or service</button>` : ''}
     ${x.slip ? `<div class="cslip">${x.slip.tracking ? `<span>Tracking <b>${esc(x.slip.tracking)}</b> <button class="ib" data-act="copy" data-v="${esc(x.slip.tracking)}" aria-label="Copy tracking number">${ICON.copy}</button>${tu ? ` <a href="${esc(tu)}" target="_blank" rel="noopener">Track</a>` : ''}</span>` : ''}${x.slip.has ? `<button class="slipb" data-act="clientSlip" data-id="${esc(x.id)}" aria-label="Open the booking slip">${x.slip.t ? `<img src="${safeImg(x.slip.t)}" alt="Booking slip">` : 'Open slip'}</button>` : ''}</div>` : ''}
     ${x.pickup ? `<div class="cslip"><span class="grow"><b>Collect from:</b> ${x.pickup.length ? x.pickup.map((d) => `${esc(d.name)}${d.phone ? ' · ' + esc(fmtPhone(d.phone)) : ''} ${telLinks({ phone: d.phone })}`).join('<br>') : 'not chosen yet'}</span></div>` : ''}
     </div>`;
@@ -236,11 +280,12 @@ export function telLinks(g, big) {
 }
 // Owner: is the receiver visible to the dispatcher? Dispatcher: a note while it is hidden.
 export function releaseLine(g) {
-  if (g.locked) return '<div class="rel hid">Receiver details are not released yet</div>';
+  if (g.locked) return '<div class="rel hid">The owner has not shared this address yet</div>';
   if (!isAdmin() || g.done) return '';
+  if (g.typedBy) return `<div class="rel on">Added by ${esc(S.people.find((p) => p.id === g.typedBy)?.name || 'the dispatcher')}, who can see it <button class="btn sm" data-act="release" data-id="${g.id}" data-on="1">Share with all dispatchers</button></div>`;
   return g.released
-    ? `<div class="rel on">Visible to dispatcher <button class="btn sm" data-act="release" data-id="${g.id}" data-on="0">Hide</button></div>`
-    : `<div class="rel hid">Hidden from dispatcher <button class="btn sm" data-act="release" data-id="${g.id}" data-on="1">Show</button></div>`;
+    ? `<div class="rel on">Shared with dispatcher <button class="btn sm" data-act="release" data-id="${g.id}" data-on="0">Stop sharing</button></div>`
+    : `<div class="rel hid">Address not shared with dispatcher <button class="btn sm" data-act="release" data-id="${g.id}" data-on="1">Share</button></div>`;
 }
 // Owner: whose parcel this is, and what that client may see on their page.
 export function clientLine(g) {
@@ -287,22 +332,22 @@ function vPhotos() {
   }
   h += uploadPanel();
   const all = visItems();
-  if (all.length && un.length) h += `<div class="note bad"><span>${plural(un.length, 'item')} not in any group yet</span>${S.show !== 'un' ? '<button class="btn sm" data-act="show" data-v="un">Show them</button>' : ''}</div>`;
-  if (all.length && !un.length) h += `<div class="note"><span>Every item is in a group.</span><button class="btn sm" data-act="tab" data-v="service">See by service</button></div>`;
+  if (all.length && un.length) h += `<div class="note bad"><span>${plural(un.length, 'item')} not in a parcel yet</span>${S.show !== 'un' ? '<button class="btn sm" data-act="show" data-v="un">Show them</button>' : ''}</div>`;
+  if (all.length && !un.length) h += `<div class="note"><span>Every item is in a parcel.</span><button class="btn sm" data-act="tab" data-v="service">Go to Send</button></div>`;
   const checked = all.filter((i) => i.recv).length, bad = all.filter((i) => i.recv === 'missing' || i.recv === 'damaged').length;
   if (all.length && (checked || isDispatcher())) h += `<div class="note ${bad ? 'bad' : ''}"><span>Receive check: ${checked} of ${all.length} checked${bad ? `, ${bad} missing or damaged` : ''}</span>${checked < all.length && S.show !== 'unchecked' ? '<button class="btn sm" data-act="show" data-v="unchecked">Show unchecked</button>' : ''}</div>`;
-  h += `<div class="tray" aria-label="Groups"><button class="gchip" data-drop="" data-act="noop"><span>Not in a group</span><b>${un.length}</b></button>${active().map((g) => `<button class="gchip" data-key="tray-${g.id}" data-drop="${g.id}" data-act="editGroup" data-id="${g.id}" style="--g:${gColor(g)}"><i></i><span><b class="pn">${esc(pLabel(g))}</b> ${esc(gTitle(g))}</span><b>${itemsIn(g.id).length}</b></button>`).join('')}${can('group') ? '<button class="gchip add" data-act="newGroupSel">+ New group</button>' : ''}</div>`;
-  h += `<div class="board"><div><div class="toolbar"><div class="seg"><button class="${S.show === 'un' ? 'on' : ''}" data-act="show" data-v="un">Not grouped ${un.length}</button><button class="${S.show === 'todo' ? 'on' : ''}" data-act="show" data-v="todo">Still to send ${ts.length}</button><button class="${S.show === 'all' ? 'on' : ''}" data-act="show" data-v="all">All ${all.length}</button></div>${shown.length ? '<button class="btn sm" data-act="selAll">Select all shown</button>' : ''}${aiAllowed() && can('name') && all.some((i) => !i.name) ? '<button class="btn sm" data-act="aiNameAll" title="Send thumbnails to AI to suggest names">Name with AI</button>' : ''}</div>
- ${all.length > 12 ? searchBox('Search items, #number or group') : ''}
- <p class="dim hint">${matchMedia('(pointer:fine)').matches ? 'Click photos to select (Shift-click for a range, or drag a box). Drag them onto a group on the right.' : 'Tap photos to select, then Add to group. Or hold a photo and drag it onto a group above.'}</p>`;
+  h += `<div class="tray" aria-label="Parcels"><button class="gchip" data-drop="" data-act="noop"><span>No parcel</span><b>${un.length}</b></button>${active().map((g) => `<button class="gchip" data-key="tray-${g.id}" data-drop="${g.id}" data-act="editGroup" data-id="${g.id}" style="--g:${gColor(g)}"><i></i><span><b class="pn">${esc(pLabel(g))}</b> ${esc(gTitle(g))}</span><b>${itemsIn(g.id).length}</b></button>`).join('')}${can('group') ? '<button class="gchip add" data-act="newGroupSel">+ New parcel</button>' : ''}</div>`;
+  h += `<div class="board"><div><div class="toolbar"><div class="seg"><button class="${S.show === 'un' ? 'on' : ''}" data-act="show" data-v="un">No parcel ${un.length}</button><button class="${S.show === 'todo' ? 'on' : ''}" data-act="show" data-v="todo">Still to send ${ts.length}</button><button class="${S.show === 'all' ? 'on' : ''}" data-act="show" data-v="all">All ${all.length}</button></div>${shown.length ? '<button class="btn sm" data-act="selAll">Select all shown</button>' : ''}${aiAllowed() && can('name') && all.some((i) => !i.name) ? '<button class="btn sm" data-act="aiNameAll" title="Send thumbnails to AI to suggest names">Name with AI</button>' : ''}</div>
+ ${all.length > 12 ? searchBox('Search items, #number or parcel') : ''}
+ <p class="dim hint">${matchMedia('(pointer:fine)').matches ? 'Click photos to select (Shift-click for a range, or drag a box). Drag them onto a parcel on the right.' : 'Tap photos to select, then Put in parcel. Or hold a photo and drag it onto a parcel above.'}</p>`;
   if (!all.length) h += `<div class="empty"><h2>No photos yet</h2><p>${can('upload') ? 'Take a photo of each item, or add many at once from your library.' : 'No photos have been uploaded for this flight yet. They appear here as soon as they are.'}</p></div>`;
-  else if (!shown.length) h += S.q ? '<div class="empty"><h2>Nothing found</h2><p>No item matches the search.</p></div>' : '<div class="empty"><h2>All grouped</h2><p>Every item is in a group.</p></div>';
+  else if (!shown.length) h += S.q ? '<div class="empty"><h2>Nothing found</h2><p>No item matches the search.</p></div>' : '<div class="empty"><h2>All in parcels</h2><p>Every item is in a parcel.</p></div>';
   else {
     // Fast grid: render in batches; a sentinel near the end loads the next batch.
     const lim = Math.max(S.gridLimit, 60);
     h += `<div class="grid" id="grid">${shown.slice(0, lim).map(card).join('')}</div>${shown.length > lim ? `<div id="more" class="dim more">Loading ${shown.length - lim} more…</div>` : ''}`;
   }
-  h += `</div><aside class="gpanel" aria-label="Groups">${can('group') ? '<button class="btn primary wide" data-act="newGroupSel" style="margin-bottom:10px">+ New group (paste address)</button><div class="dropzone" data-drop="">Drop here to take out of a group</div>' : ''}${active().map((g) => groupCard(g, true)).join('') || '<p class="dim">No groups waiting to be sent.</p>'}${sentList()}</aside></div>`;
+  h += `</div><aside class="gpanel" aria-label="Parcels">${can('group') ? '<button class="btn primary wide" data-act="newGroupSel" style="margin-bottom:10px">+ New parcel (paste addresses)</button><div class="dropzone" data-drop="">Drop here to take out of a group</div>' : ''}${active().map((g) => groupCard(g, true)).join('') || '<p class="dim">No parcels waiting to be sent.</p>'}${sentList()}</aside></div>`;
   return h;
 }
 let io = null;
@@ -314,7 +359,7 @@ function observeSentinel() {
 }
 function sentList() {
   const sg = sentGroups().filter(matchGroup); if (!sg.length) return '';
-  return `<div class="sentbox"><button class="btn sm wide" data-act="toggleSent">${S.showSent ? 'Hide' : 'Show'} sent groups (${sg.length})</button>${S.showSent ? `<div style="margin-top:8px">${sg.map((g) => groupCard(g, true)).join('')}</div>` : ''}</div>`;
+  return `<div class="sentbox"><button class="btn sm wide" data-act="toggleSent">${S.showSent ? 'Hide' : 'Show'} sent parcels (${sg.length})</button>${S.showSent ? `<div style="margin-top:8px">${sg.map((g) => groupCard(g, true)).join('')}</div>` : ''}</div>`;
 }
 
 /* ---------- groups ---------- */
@@ -330,8 +375,8 @@ function filteredGroups() {
   return gs.sort(by[f.sort] || by.parcel);
 }
 function vGroups() {
-  let h = `<div class="row" style="margin-bottom:12px">${can('group') ? `<button class="btn primary" data-act="newGroupSel">+ New group (paste address)</button><button class="btn" data-act="bulk">Paste many addresses</button>${aiAllowed() ? '<button class="btn" data-act="shot">Read a screenshot</button>' : ''}` : ''}</div>`;
-  if (!S.groups.length) return h + '<div class="empty"><h2>No groups yet</h2><p>Make one group for each parcel. Paste the person\'s message as it is; name, phones, address, city and service are filled in for you.</p></div>';
+  let h = `<div class="row" style="margin-bottom:12px">${can('group') ? `<button class="btn primary" data-act="newGroupSel">+ New parcel (paste addresses)</button><button class="btn" data-act="bulk">Paste many addresses</button>${aiAllowed() ? '<button class="btn" data-act="shot">Read a screenshot</button>' : ''}` : ''}</div>`;
+  if (!S.groups.length) return h + '<div class="empty"><h2>No parcels yet</h2><p>Make one parcel for each client. Paste the person\'s message as it is; name, phones, address, city and service are filled in for you.</p></div>';
   const cities = [...new Set(S.groups.map((g) => g.city).filter(Boolean))].sort();
   const svcs = [...new Set(S.groups.map((g) => svcKey(g.service)))].sort(svcSort);
   const f = S.gf;
@@ -341,7 +386,7 @@ function vGroups() {
   <select data-gf="service" aria-label="Service"><option value="">All services</option>${svcs.map((c) => `<option ${f.service === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
   <select data-gf="sort" aria-label="Sort">${[['parcel', 'Parcel number'], ['oldest', 'Oldest first'], ['newest', 'Newest first'], ['name', 'Name A–Z'], ['city', 'City']].map(([k, l]) => `<option value="${k}" ${f.sort === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`;
   const gs = filteredGroups();
-  return h + (gs.length ? `<div class="glist">${gs.map((g) => groupCard(g, false)).join('')}</div>` : '<div class="empty"><h2>Nothing here</h2><p>No group matches these filters.</p></div>');
+  return h + (gs.length ? `<div class="glist">${gs.map((g) => groupCard(g, false)).join('')}</div>` : '<div class="empty"><h2>Nothing here</h2><p>No parcel matches these filters.</p></div>');
 }
 
 /* ---------- by service ---------- */
@@ -365,19 +410,19 @@ function parcel(g, k) {
    <span class="p-name"><span class="pno">${esc(pLabel(g))}</span> ${esc(gTitle(g))}${g.phone ? ` <span style="font-weight:600">${esc(fmtPhone(g.phone))}</span>` : ''}${g.phone2 ? `<span class="dim" style="font-weight:500">, ${esc(fmtPhone(g.phone2))}</span>` : ''}${pendingBadge(g._pending)}${svcs.length > 1 && svcs[0] === k ? ` <span class="svc alt">or ${esc(svcs.slice(1).join(' / '))}</span>` : ''}</span>
    <div class="p-addr">${esc(g.address || '')}${g.city ? `, <b>${esc(g.city)}</b>` : ''}${g.note ? `<div class="dim">${esc(g.note)}</div>` : ''}${m.length ? `<div class="warn">Missing: ${m.join(', ')}</div>` : ''}${releaseLine(g)}${clientLine(g)}
    ${g.tracking || g.weight || g.charges || step ? `<div class="p-meta">${step ? `<span class="stp">${esc(step[1])}</span>` : ''}${g.tracking ? `<span>Tracking <b>${esc(g.tracking)}</b> <button class="ib" data-act="copy" data-v="${esc(g.tracking)}" aria-label="Copy tracking number">${ICON.copy}</button>${tu ? ` <a href="${esc(tu)}" target="_blank" rel="noopener">Track</a>` : ''}</span>` : ''}${g.weight ? `<span>${esc(g.weight)} kg</span>` : ''}${g.charges ? `<span>Rs ${Number(g.charges).toLocaleString('en-PK')}</span>` : ''}</div>` : ''}</div>
-   <div class="p-items">${its.length ? its.map((i) => `<span><img src="${safeImg(i.photos?.[0]?.t || '')}" alt="" loading="lazy">${esc(itemLabel(i))}</span>`).join('') : '<span class="warn" style="background:none">No items in this group</span>'}</div><div class="row" style="grid-column:2;margin-top:4px"><button class="btn sm" data-act="counter" data-id="${g.id}">Show big</button>${telLinks(g)}${g.done && isMobile(g.phone) ? `<button class="btn sm" data-act="msgReceiver" data-id="${g.id}">Message receiver</button>` : ''}${can('group') || can('send') ? `<button class="btn sm" data-act="editGroup" data-id="${g.id}">Edit</button>` : ''}</div></div>`;
+   <div class="p-items">${its.length ? its.map((i) => `<span><img src="${safeImg(i.photos?.[0]?.t || '')}" alt="" loading="lazy">${esc(itemLabel(i))}</span>`).join('') : '<span class="warn" style="background:none">No items in this parcel</span>'}</div><div class="row" style="grid-column:2;margin-top:4px"><button class="btn sm" data-act="counter" data-id="${g.id}">Show big</button>${telLinks(g)}${g.done && isMobile(g.phone) ? `<button class="btn sm" data-act="msgReceiver" data-id="${g.id}">Message client</button>` : ''}${can('group') || can('send') ? `<button class="btn sm" data-act="editGroup" data-id="${g.id}">Edit</button>` : ''}</div></div>`;
 }
 function vService() {
   const un = ungrouped(); let h = dashboard();
-  if (un.length) h += `<div class="note bad"><span>${plural(un.length, 'item')} not in any group. They would be left behind.</span><button class="btn sm" data-act="showUn">Show them</button></div>`;
+  if (un.length) h += `<div class="note bad"><span>${plural(un.length, 'item')} not in a parcel. They would be left behind.</span><button class="btn sm" data-act="showUn">Show them</button></div>`;
   const bad = active().filter((g) => missing(g).length);
-  if (bad.length) h += `<div class="note bad"><span>${plural(bad.length, 'group')} missing details.</span><button class="btn sm" data-act="showMissing">Show them</button></div>`;
+  if (bad.length) h += `<div class="note bad"><span>${plural(bad.length, 'parcel')} missing details.</span><button class="btn sm" data-act="showMissing">Show them</button></div>`;
   const toShow = isAdmin() && !S.cfg.slipAuto ? S.groups.filter((g) => g.cid && (g.receipt || g.tracking) && !g.slipOk) : [];
   if (S.groups.length && (can('send') || toShow.length)) h += `<div class="row" style="margin-bottom:10px">${can('send') ? '<button class="btn" data-act="slips">Add booking slips</button>' : ''}${toShow.length ? `<button class="btn" data-act="slipsOkAll">Show ${plural(toShow.length, 'slip')} to clients</button>` : ''}</div>`;
   if (S.groups.length > 6) h += searchBox('Search name, phone, city, tracking');
   if (active().length) h += '<p class="dim hint">Double-tap any parcel to show it big.</p>';
   if (S.groups.length && !active().length) h += '<div class="note"><span>Every parcel on this flight is marked sent.</span></div>';
-  if (!S.groups.length) return h + '<div class="empty"><h2>Nothing sorted yet</h2><p>Groups appear here, sorted by TCS, Daewoo, Leopards and so on, once they are made.</p></div>';
+  if (!S.groups.length) return h + '<div class="empty"><h2>Nothing sorted yet</h2><p>Parcels appear here, sorted by TCS, Daewoo, Leopards and so on, once they are made.</p></div>';
   // B5: "TCS / Leopards" is listed under TCS with a tag, so "Mark all TCS sent" covers it.
   const by = {}; S.groups.filter(matchGroup).forEach((g) => { const k = svcKey(g.service); (by[k] = by[k] || []).push(g); });
   for (const k of Object.keys(by).sort(svcSort)) {
@@ -385,7 +430,7 @@ function vService() {
     const gs = showS ? [...open, ...sent] : open;
     const items = open.reduce((a, g) => a + piecesIn(g.id), 0);
     const kg = all.reduce((s, g) => s + (Number(g.weight) || 0), 0), rs = all.reduce((s, g) => s + (Number(g.charges) || 0), 0);
-    h += `<section class="svc-sec" data-key="sec-${esc(k)}"><div class="svc-h"><h2>${esc(k)}</h2><span class="dim grow" style="font-weight:600">${open.length ? `${plural(open.length, 'parcel')} to send, ${plural(items, 'piece')}` : 'All sent'}${sent.length ? `, ${sent.length} sent` : ''}${kg ? `, ${+kg.toFixed(2)} kg` : ''}${rs ? `, Rs ${rs.toLocaleString('en-PK')}` : ''}</span>${open.length && can('send') && k !== 'No service yet' ? `<button class="btn sm dark" data-act="sendAll" data-v="${esc(k)}">Mark all ${esc(k)} sent</button>` : ''}${isAdmin() && open.some((g) => !g.released) ? `<button class="btn sm" data-act="releaseSvc" data-v="${esc(k)}">Show all ${esc(k)} to dispatcher</button>` : ''}${sent.length ? `<button class="btn sm" data-act="openSent" data-v="${esc(k)}">${showS ? 'Hide sent' : 'Show sent'}</button>` : ''}</div>${gs.map((g) => parcel(g, k)).join('')}</section>`;
+    h += `<section class="svc-sec" data-key="sec-${esc(k)}"><div class="svc-h"><h2>${esc(k)}</h2><span class="dim grow" style="font-weight:600">${open.length ? `${plural(open.length, 'parcel')} to send, ${plural(items, 'piece')}` : 'All sent'}${sent.length ? `, ${sent.length} sent` : ''}${kg ? `, ${+kg.toFixed(2)} kg` : ''}${rs ? `, Rs ${rs.toLocaleString('en-PK')}` : ''}</span>${open.length && can('send') && k !== 'No service yet' ? `<button class="btn sm dark" data-act="sendAll" data-v="${esc(k)}">Mark all ${esc(k)} sent</button>` : ''}${isAdmin() && open.some((g) => !g.released) ? `<button class="btn sm" data-act="releaseSvc" data-v="${esc(k)}">Share all ${esc(k)} addresses</button>` : ''}${sent.length ? `<button class="btn sm" data-act="openSent" data-v="${esc(k)}">${showS ? 'Hide sent' : 'Show sent'}</button>` : ''}</div>${gs.map((g) => parcel(g, k)).join('')}</section>`;
   }
   return h;
 }
@@ -396,7 +441,7 @@ function selbar(on) {
   if (on && S.sel.size && S.tab !== 'service' && !layerCount()) {
     if (!sb) { sb = document.createElement('div'); sb.id = 'selbar'; sb.className = 'selbar'; document.body.appendChild(sb); }
     const grouped = [...S.sel].some((id) => groupById(S.items.find((i) => i.id === id)?.groupId));
-    sb.innerHTML = `<span class="grow">${S.sel.size} selected</span>${can('group') ? `<button class="btn sm primary" data-act="selToGroup">Add to group</button>${grouped ? '<button class="btn sm" data-act="selUngroup">Take out</button>' : ''}` : ''}${can('upload') && S.sel.size > 1 ? '<button class="btn sm" data-act="selCombine">Combine</button>' : ''}${aiAllowed() && can('name') ? '<button class="btn sm" data-act="aiNameSel">Name with AI</button>' : ''}${can('send') ? '<button class="btn sm" data-act="selRecv" data-v="ok">Received</button><button class="btn sm" data-act="selRecv" data-v="missing">Missing</button>' : ''}${isAdmin() ? '<button class="btn sm danger" data-act="selDelete">Delete</button>' : ''}<button class="btn sm" data-act="selClear">Clear</button>`;
+    sb.innerHTML = `<span class="grow">${S.sel.size} selected</span>${can('group') ? `<button class="btn sm primary" data-act="selToGroup">Put in parcel</button>${grouped ? '<button class="btn sm" data-act="selUngroup">Take out</button>' : ''}` : ''}${can('upload') && S.sel.size > 1 ? '<button class="btn sm" data-act="selCombine">Combine</button>' : ''}${aiAllowed() && can('name') ? '<button class="btn sm" data-act="aiNameSel">Name with AI</button>' : ''}${can('send') ? '<button class="btn sm" data-act="selRecv" data-v="ok">Received</button><button class="btn sm" data-act="selRecv" data-v="missing">Missing</button>' : ''}${isAdmin() ? '<button class="btn sm danger" data-act="selDelete">Delete</button>' : ''}<button class="btn sm" data-act="selClear">Clear</button>`;
   } else if (sb) sb.remove();
 }
 export { CITIES, SERVICES, mainSvc };

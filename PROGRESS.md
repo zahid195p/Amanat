@@ -79,5 +79,22 @@ only their own part; contacts reach a device only after the owner releases them.
   Owner sees all with totals incl. courier charges; a dispatcher sees only their own.
 - `tests/e2e.mjs`: 104 checks.
 
+### Redesign round 1 (after Zahid's review, 2026-11-17)
+- Fixes: top bar stays dark in dark mode (`--bar`); nothing wider than a phone (grid minmax, date/time
+  inputs); private tabs use memory storage instead of hanging; login never waits more than 20 s.
+- Clients are `people` docs with `role: 'client'`, made automatically from pasted addresses (phone decides:
+  `pk` = last 10 digits). Owner: offline, in the app. Dispatcher: `/api/people` `clientEnsure`.
+- Client login, both ways: shared link `/#c` (phone + 4-digit code chosen on first visit, `/api/client`,
+  code in KV `ccode:<pid>`, lockout) and personal link `/#p=<key>` (KV `clink:<key>`, no code). Owner can turn
+  the shared link off for everyone (`config.sharedOff`) or one client (`sharedOff`), reset a code, make a new
+  personal link, turn a client off. `since` signs old sessions out.
+- Client page: "My delivery details" (paste + AI); saving updates the client and their parcels not yet booked.
+  Clients never see missing/damaged.
+- Dispatchers may make parcels and sort items on their flights; a parcel they type in is visible to them.
+- Words: Items, Parcels, Send, Client, Share. Luggage stays.
+- Flight tab: owner's step list; add passenger and dispatcher right there; demo data button (test only).
+- Every invite/message has Copy (for WeChat) and WhatsApp.
+- `tests/e2e.mjs`: 116 checks.
+
 ### Next
 - Switch live to version 2: migrate root collections into `apps/live`, deploy to project `amanat`.

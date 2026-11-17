@@ -4,9 +4,9 @@ import {
   S, $, $$, esc, rid, now, plural, todayISO, fmtDate, fmtTime, fmtBytes, fmtPhone, isAdmin, can, curFlight, groupById, gColor, gTitle,
   itemsIn, active, qtyOf, gLabel, pLabel, piecesIn, numLabel, itemLabel, svcKey, svcSort, mainSvc, missing, trackUrl, waMessage, toast, sheet, closeSheet,
   closeAll, choose, ask, pushLayer, closeTop, schedule, upd, put, del, w, D, saveLater, flushAll, logEv, newGroup, saveBook, lookupBook,
-  moveItems, combine, deleteItems, setDone, setStep, setFlight, nextTmp, getDoc, getDocs, collection, query, where, writeBatch,
+  moveItems, combine, clientByPhone, ensureClient, clientList, deleteItems, setDone, setStep, setFlight, nextTmp, getDoc, getDocs, collection, query, where, writeBatch,
   increment, deleteField, db, STEPS, DEFAULT_WA, DEFAULT_TRACK, FREE_BYTES, setDoc, updateDoc, C, safeImg,
-  commitUndos, auth, signOut, unsubscribeAll, ROLE_LABEL, PRIVATE_FIELDS, landAtOf, RECV, setRecv, AUTO_CHOICES, EXP_CATS, addExpense, isDispatcher, setFlightDispatchers, enterViewAs, SPACE,
+  commitUndos, auth, signOut, unsubscribeAll, ROLE_LABEL, PRIVATE_FIELDS, landAtOf, addTrip, RECV, setRecv, AUTO_CHOICES, EXP_CATS, addExpense, isDispatcher, setFlightDispatchers, enterViewAs, SPACE,
 } from './core.js';
 import { FIELDS, SERVICES, CITIES, phoneKey, isMobile, waNumber, findPhones, localParse, fixUp, matchSlips } from './parse.js';
 import { fullPhoto, cachePhoto, compressOne, handleFiles } from './images.js';
@@ -38,9 +38,9 @@ function pickFile(accept, multiple) {
 export function openGroupSheet(gid, assignIds = [], prefill = null) {
   const g = gid ? groupById(gid) : null;
   const d = g || { name: '', phone: '', phone2: '', address: '', city: '', service: '', note: '', raw: '' };
-  const eg = can('group'), es = can('send');
+  const eg = can('group') && !g?.locked, es = can('send');
   const ro = eg ? '' : 'readonly';
-  const sh = sheet(g ? 'Edit group ' + pLabel(g) : 'New group', `
+  const sh = sheet(g ? 'Parcel ' + pLabel(g) : 'New parcel', `
  ${eg ? `<label class="fld"><span>Paste one person's message as it is (one parcel)</span><textarea id="gs-raw" style="min-height:110px" placeholder="Ali Khan&#10;0300 1234567&#10;House 12, Street 4, Ali Town, Lahore&#10;TCS">${esc(d.raw || '')}</textarea></label>
  <div class="row" style="margin-bottom:8px"><button class="btn dark" id="gs-read">Fill in from the message</button>${aiAllowed() ? '<button class="btn" id="gs-shot">Read a screenshot</button>' : ''}<span class="status" id="gs-st"></span></div>
  <div id="gs-diff"></div>` : ''}
@@ -53,13 +53,13 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
  <label class="fld"><span>Service (tap more than one for "TCS / Leopards")</span><input id="gs-service" value="${esc(d.service)}" placeholder="TCS" ${ro}></label>
  ${eg ? `<div class="chips" id="gs-chips" style="margin:-4px 0 12px">${SERVICES.map((s) => `<button class="chip" data-svc="${s}">${s}</button>`).join('')}</div>` : ''}
  <label class="fld"><span>Note</span><input id="gs-note" value="${esc(d.note)}" placeholder="Fragile, wrap well" ${ro}></label>
- ${isAdmin() ? `<label class="fld"><span>Client (sees this parcel on their own page)</span><select id="gs-cid"><option value="">No client page</option>${S.people.filter((p) => p.role === 'client').map((p) => `<option value="${p.id}" ${d.cid === p.id ? 'selected' : ''}>${esc(p.name)}${p.phone ? ' · ' + esc(fmtPhone(p.phone)) : ''}</option>`).join('')}</select></label>` : ''}
+ ${isAdmin() ? '<div class="rel cl" id="gs-client"></div>' : ''}
  ${g && es ? `<div class="box"><div class="two"><label class="fld"><span>Tracking number</span><input id="gs-tracking" value="${esc(g.tracking || '')}" autocomplete="off"></label><div class="two"><label class="fld"><span>Weight kg</span><input id="gs-weight" inputmode="decimal" value="${esc(g.weight ?? '')}"></label><label class="fld"><span>Charges Rs</span><input id="gs-charges" inputmode="numeric" value="${esc(g.charges ?? '')}"></label></div></div>
    <div class="fld"><span class="lab">Status</span><div class="steps" id="gs-steps"></div></div>
    <div class="fld"><span class="lab">Booking slip photo</span><div class="row" id="gs-receipt"></div></div></div>` : ''}
- ${g ? '<div class="fld"><span class="lab">Items in this group</span><div id="gs-items"></div></div>' : ''}
- ${assignIds.length ? `<p class="status">${plural(assignIds.length, 'selected item')} will go into this group.</p>` : ''}
- <div class="row"><button class="btn primary grow" id="gs-save">${g ? 'Save' : 'Make group'}</button>${g && eg ? '<button class="btn danger" id="gs-del">Delete group</button>' : ''}</div>`, { onClose: () => LIVE.delete(live) });
+ ${g ? '<div class="fld"><span class="lab">Items in this parcel</span><div id="gs-items"></div></div>' : ''}
+ ${assignIds.length ? `<p class="status">${plural(assignIds.length, 'selected item')} will go into this parcel.</p>` : ''}
+ <div class="row"><button class="btn primary grow" id="gs-save">${g ? 'Save' : 'Make parcel'}</button>${g && eg ? '<button class="btn danger" id="gs-del">Delete parcel</button>' : ''}</div>`, { onClose: () => LIVE.delete(live) });
   const F = (k) => sh.querySelector('#gs-' + k);
   const st = F('st');
   let aiState = null; // {ai, pending}
@@ -68,7 +68,7 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
   // Live parts (re-rendered from snapshots).
   const live = () => {
     const cur = g && groupById(g.id);
-    if (g && !cur) { sh.querySelector('.sh-b').innerHTML = '<p class="dim">This group was deleted.</p>'; LIVE.delete(live); return; }
+    if (g && !cur) { sh.querySelector('.sh-b').innerHTML = '<p class="dim">This parcel was deleted.</p>'; LIVE.delete(live); return; }
     if (F('items')) {
       const its = itemsIn(g.id);
       morph(F('items'), its.length ? its.map((i) => `<div class="row irow"><img src="${safeImg(i.photos?.[0]?.t || '')}" alt=""><span class="grow">${numLabel(i)} ${esc(itemLabel(i))}</span>${eg ? `<button class="btn sm" data-out="${i.id}">Take out</button>` : ''}</div>`).join('') : '<p class="dim">No items yet. Drag photos onto this group.</p>');
@@ -153,7 +153,7 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
       try {
         const list = await readImage(await compressOne(f, 1400, 0.75));
         if (!list.length) { st.textContent = 'No address found in the screenshot.'; return; }
-        fill(list[0]); st.textContent = list.length > 1 ? `Found ${list.length} parcels; filled in the first. Use "Read a screenshot" on the Groups tab to make all.` : 'Filled in from the screenshot. Check each field.';
+        fill(list[0]); st.textContent = list.length > 1 ? `Found ${list.length} parcels; filled in the first. Use "Read a screenshot" on the Parcels tab to make all.` : 'Filled in from the screenshot. Check each field.';
         aiState = { ai: true };
       } catch (e) { st.className = 'status err'; st.textContent = e.message; }
     };
@@ -170,15 +170,15 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
       checkDup();
       const b = await lookupBook(F('phone').value); if (!b) return;
       let n = 0; for (const k of ['name', 'phone2', 'address', 'city', 'service']) if (b[k] && !F(k).value.trim()) { F(k).value = b[k]; n++; }
-      if (n) { st.className = 'status'; st.textContent = 'Known receiver: filled from the address book.'; chips(); }
+      if (n) { st.className = 'status'; st.textContent = 'Known client: filled in from last time.'; chips(); }
     });
   }
   // Duplicate phone warning (feature 18).
   const dupOf = () => { const k = phoneKey(F('phone').value); if (!k) return null; return S.groups.find((x) => x.id !== g?.id && !x.done && [x.phone, ...String(x.phone2 || '').split(',')].some((p) => phoneKey(p) === k)); };
-  const checkDup = () => { const box = F('dup'); if (!box) return; const x = dupOf(); box.innerHTML = x ? `<div class="note bad"><span>${esc(gLabel(x))} already has a group with this phone on this flight.</span></div>` : ''; };
+  const checkDup = () => { const box = F('dup'); if (!box) return; const x = dupOf(); box.innerHTML = x ? `<div class="note bad"><span>${esc(gLabel(x))} already has a parcel with this phone on this flight.</span></div>` : ''; };
   // A phone number that belongs to a client picks that client.
-  const pickClient = () => { const sel = F('cid'); if (!sel || sel.value) return; const k = phoneKey(F('phone').value); const c = k && S.people.find((p) => p.role === 'client' && phoneKey(p.phone) === k); if (c) sel.value = c.id; };
-  F('phone').addEventListener('change', pickClient);
+  const pickClient = () => { const box = F('client'); if (!box) return; const c = clientByPhone(F('phone').value); box.textContent = c ? `Client: ${c.name || 'no name'} (known from before)` : phoneKey(F('phone').value) ? 'A new client is added with this phone number.' : 'Add a phone number to make this a client.'; };
+  F('phone').addEventListener('change', pickClient); F('phone').addEventListener('input', pickClient); pickClient();
   checkDup();
   if (prefill) fill(prefill);
 
@@ -192,11 +192,10 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
       const cv = parseFloat(String(F('charges').value).replace(/,/g, '')); extra.charges = cv > 0 ? cv : null;
     }
     if (aiState) data.aiPending = !!aiState.pending && !aiState.ai;
-    if (F('cid')) data.cid = F('cid').value;
     if (!g) {
       const x = dupOf();
       if (x) {
-        const c = await choose('Same phone number', `${gLabel(x)} already has a group with this phone. Put these items in that group instead?`, [{ label: 'Cancel', v: null }, { label: 'Make a new group', v: 'new' }, { label: 'Merge into ' + gLabel(x), v: 'merge', cls: 'primary' }]);
+        const c = await choose('Same phone number', `${gLabel(x)} already has a parcel with this phone. Put these items in that parcel instead?`, [{ label: 'Cancel', v: null }, { label: 'Make a new parcel', v: 'new' }, { label: 'Merge into ' + gLabel(x), v: 'merge', cls: 'primary' }]);
         if (!c) return;
         if (c === 'merge') {
           const patch = {}; for (const k of FIELDS) if (data[k] && !x[k]) patch[k] = data[k];
@@ -205,18 +204,19 @@ export function openGroupSheet(gid, assignIds = [], prefill = null) {
           closeSheet(); toast('Merged into ' + gLabel(x)); return;
         }
       }
-      newGroup(data, assignIds); closeSheet(); toast('Group made'); return;
+      newGroup(data, assignIds); closeSheet(); toast('Parcel made'); return;
     }
     const cur = groupById(g.id) || g; const patch = {};
+    if (eg && isAdmin() && phoneKey(data.phone) && phoneKey(data.phone) !== phoneKey(cur.phone)) data.cid = ensureClient(data, g.id);
     if (eg) for (const k of [...FIELDS, 'raw', 'aiPending', 'cid']) if (data[k] !== undefined && data[k] !== (cur[k] ?? (k === 'aiPending' ? false : ''))) patch[k] = data[k];
     for (const k of Object.keys(extra)) if (extra[k] !== (cur[k] ?? (k === 'tracking' ? '' : null))) patch[k] = extra[k];
     if (Object.keys(patch).length) { upd('groups/' + g.id, patch); if (eg) saveBook({ ...cur, ...patch }); logEv(`edited ${gLabel({ ...cur, ...patch })} (${Object.keys(patch).join(', ')})`); }
     closeSheet(); toast('Saved');
   };
   const delb = F('del'); if (delb) delb.onclick = async () => {
-    if (!(await ask('Delete this group? Its items go back to "not in a group".'))) return;
+    if (!(await ask('Delete this parcel? Its items go back to "no parcel yet".'))) return;
     itemsIn(g.id).forEach((i) => upd('items/' + i.id, { groupId: '' }));
-    del('groups/' + g.id); logEv(`deleted group ${gLabel(g)}`); closeSheet();
+    del('groups/' + g.id); logEv(`deleted parcel ${gLabel(g)}`); closeSheet();
   };
   if (!g && eg && !prefill) setTimeout(() => F('raw')?.focus(), 120);
   return sh;
@@ -234,7 +234,7 @@ export async function aiCheck(gid) {
 /* =================== pick group =================== */
 export function openPickGroup(ids) {
   // B4: sent groups are not offered.
-  const sh = sheet('Add to group', `<button class="btn primary wide" data-pg="__new" style="margin-bottom:10px">+ New group (paste address)</button><div class="gpick">${active().map((g) => `<button data-pg="${g.id}" style="--g:${gColor(g)}"><i></i>${esc(gLabel(g))} <span class="dim" style="font-weight:500">${esc(g.service || '')}</span></button>`).join('')}</div>`);
+  const sh = sheet('Put in a parcel', `<button class="btn primary wide" data-pg="__new" style="margin-bottom:10px">+ New parcel (paste address)</button><div class="gpick">${active().map((g) => `<button data-pg="${g.id}" style="--g:${gColor(g)}"><i></i>${esc(gLabel(g))} <span class="dim" style="font-weight:500">${esc(g.service || '')}</span></button>`).join('')}</div>`);
   sh.querySelectorAll('[data-pg]').forEach((b) => (b.onclick = () => { closeSheet(); if (b.dataset.pg === '__new') openGroupSheet(null, ids); else moveItems(ids, b.dataset.pg); }));
 }
 
@@ -383,7 +383,7 @@ export function msgReceiver(gid) {
 /* =================== bulk paste & screenshot review (features 15, 16) =================== */
 export function openBulk(initial) {
   const sh = sheet('Paste many addresses', `
-  <label class="fld"><span>Paste the whole WhatsApp chat. Each parcel becomes its own group.</span><textarea id="bk-text" style="min-height:160px"></textarea></label>
+  <label class="fld"><span>Paste the whole WhatsApp chat. Each address becomes a parcel, and a client is added for each new phone number.</span><textarea id="bk-text" style="min-height:160px"></textarea></label>
   <div class="row" style="margin-bottom:10px"><button class="btn dark" id="bk-read">Read the addresses</button><span class="status" id="bk-st"></span></div>
   <div id="bk-list"></div>`, { cls: 'wide' });
   const st = sh.querySelector('#bk-st');
@@ -394,7 +394,7 @@ export function openBulk(initial) {
       const k10 = phoneKey(r.phone); const dup = k10 && S.groups.find((x) => [x.phone, ...String(x.phone2 || '').split(',')].some((p) => phoneKey(p) === k10));
       return `<div class="bk ${dup ? 'dup' : ''}" data-k="${k}"><label class="bk-ck"><input type="checkbox" ${dup ? '' : 'checked'} data-ck="${k}"></label><div class="grow"><div class="two"><input data-f="name" value="${esc(r.name)}" placeholder="Name"><input data-f="phone" value="${esc(r.phone)}" placeholder="Phone"></div><input data-f="address" value="${esc(r.address)}" placeholder="Address"><div class="two"><input data-f="city" value="${esc(r.city)}" placeholder="City" list="cities2"><input data-f="service" value="${esc(r.service)}" placeholder="Service"></div>${r.phone2 ? `<div class="dim" style="font-size:13px">Other phones: ${esc(r.phone2)}</div>` : ''}${dup ? `<div class="warn">Already on this flight: ${esc(gLabel(dup))}</div>` : ''}${missing(r).length ? `<div class="warn">Missing: ${missing(r).join(', ')}</div>` : ''}</div></div>`;
     }).join('')}<datalist id="cities2">${CITIES.map((c) => `<option value="${c}">`).join('')}</datalist><button class="btn primary wide" id="bk-make">Make groups</button>`;
-    const upCount = () => { const n = box.querySelectorAll('[data-ck]:checked').length; box.querySelector('#bk-make').textContent = `Make ${plural(n, 'group')}`; };
+    const upCount = () => { const n = box.querySelectorAll('[data-ck]:checked').length; box.querySelector('#bk-make').textContent = `Make ${plural(n, 'parcel')}`; };
     box.addEventListener('change', upCount); upCount();
     box.querySelector('#bk-none').onclick = () => { box.querySelectorAll('[data-ck]').forEach((c) => (c.checked = false)); upCount(); };
     box.querySelector('#bk-make').onclick = () => {
@@ -455,7 +455,7 @@ export function openFlights() {
   const body = `${can('flights') ? `<div class="box"><div class="two"><label class="fld"><span>Flight</span><input id="nf-label" placeholder="PK 853"></label><label class="fld"><span>Date</span><input id="nf-date" type="date" value="${todayISO()}"></label></div><label class="fld"><span>Landing time, Pakistan time (optional)</span><input id="nf-time" type="time"></label><button class="btn primary wide" data-act="createFlight">Add flight</button></div>` : ''}
  <div class="meter"><div class="row"><span class="grow"><b>Storage</b> ${fmtBytes(used)} of ${fmtBytes(FREE_BYTES)} free</span><span class="dim">${pct}%</span></div><div class="progress"><i style="width:${pct}%;${pct > 80 ? 'background:var(--stop)' : ''}"></i></div><div class="dim" style="font-size:13px">Archive or delete old flights to free space. Archiving keeps names, groups and small photos.</div></div>
  ${S.flights.map((f) => `<div class="gcard" style="--g:${f.id === S.fid ? 'var(--sign)' : 'var(--line)'}"><div class="gc-top"><span class="gc-name">${esc(f.label || 'Flight')}</span>${f.archived ? '<span class="svc alt">Archived</span>' : ''}${f.deleting ? '<span class="svc none">Deleting</span>' : ''}<span class="dim">${esc(fmtDate(f.date))}</span></div><div class="dim" style="font-size:13px">${fmtBytes(f.bytes || 0)}</div>${dispatcherChips(f)}<div class="row" style="margin-top:8px">${f.id === S.fid ? '<span class="status grow">Open now</span>' : `<button class="btn sm primary grow" data-act="openFlight" data-id="${f.id}">Open</button>`}${isAdmin() ? `<button class="btn sm" data-act="activity" data-id="${f.id}">Activity</button>` : ''}${can('export') ? `<button class="btn sm" data-act="mdFlight" data-id="${f.id}">Summary</button><button class="btn sm" data-act="csvFlight" data-id="${f.id}">Excel (CSV)</button>` : ''}${isAdmin() && !f.archived ? `<button class="btn sm" data-act="archiveFlight" data-id="${f.id}">Archive</button>` : ''}${isAdmin() ? `<button class="btn sm danger" data-act="delFlight" data-id="${f.id}">Delete</button>` : ''}</div></div>`).join('')}
- ${isAdmin() ? '<div class="box" style="margin-top:14px"><b>Backup</b><p class="dim" style="font-size:14px">A full backup file of every flight, group, item and setting. Keep it somewhere safe.</p><div class="row"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="backupPhotos">Backup with full photos</button><button class="btn sm" data-act="restore">Restore from file</button></div></div>' : ''}`;
+ ${isAdmin() ? '<div class="box" style="margin-top:14px"><b>Backup</b><p class="dim" style="font-size:14px">A full backup file of every flight, parcel, item, client and setting. Keep it somewhere safe.</p><div class="row"><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="backupPhotos">Backup with full photos</button><button class="btn sm" data-act="restore">Restore from file</button></div></div>' : ''}`;
   const sh = sheet('Flights', body);
   sh.addEventListener('click', async (ev) => {
     const b = ev.target.closest('[data-disp]'); if (!b || b.disabled) return;
@@ -609,7 +609,7 @@ export function openMenu() {
   const c = S.cfg;
   const sh = sheet('Menu', `
   <div class="box"><div class="row"><span class="grow"><b>${esc(S.me.name)}</b> <span class="dim">${ROLE_LABEL[S.me.role]}</span></span><button class="btn sm" data-act="switchFace">Log out</button></div>
-   <div class="row" style="margin-top:8px"><button class="btn sm" id="mn-link">My private link</button><button class="btn sm" id="mn-code">Change my code</button>${isAdmin() ? '<button class="btn sm primary" data-act="people">People and links</button>' : ''}</div></div>
+   <div class="row" style="margin-top:8px"><button class="btn sm" id="mn-link">My private link</button><button class="btn sm" id="mn-code">Change my code</button>${isAdmin() ? '<button class="btn sm primary" data-act="clients">Clients</button><button class="btn sm" data-act="people">Dispatchers and passengers</button>' : ''}</div></div>
   <div class="box"><b>AI helper</b><p class="dim" style="font-size:14px">AI reads pasted addresses and screenshots and suggests item names. It uses Google Gemini's free tier, where Google may use what is sent to improve its products. The basic reader always works without AI.</p>
    <label class="tgl"><input type="checkbox" id="mn-ailocal" ${S.aiLocalOff ? '' : 'checked'}> Use AI on this device</label>
    ${isAdmin() ? `<label class="tgl"><input type="checkbox" id="mn-ai" ${c.aiOff ? '' : 'checked'}> AI on for everyone</label>` : ''}</div>
@@ -640,9 +640,11 @@ export function openMenu() {
 /* =================== people, private links, view as =================== */
 const linkOf = (key) => `${location.origin}/#k=${key}`;
 const inviteText = (p, key, pin) => `Amanat: private link for ${p.name}\n${linkOf(key)}\nCode: ${pin}\nOpen the link and type the code. Please do not share them.`;
-function copyBox(title, text, note, attrs = '') {
-  const sh = sheet(title, `<p>${esc(note)}</p><textarea id="cp-text" readonly style="min-height:130px" ${attrs}>${esc(text)}</textarea><button class="btn primary wide" id="cp-btn">Copy</button>`);
-  sh.querySelector('#cp-btn').onclick = () => copy(text, 'Copied. Paste it in WhatsApp.');
+// A message to send: Copy (for WeChat or anything else) and WhatsApp, to a number or to any chat.
+export const waLink = (text, phone) => `https://wa.me/${waNumber(phone || '') || ''}?text=${encodeURIComponent(text)}`;
+function copyBox(title, text, note, attrs = '', phone = '') {
+  const sh = sheet(title, `<p>${esc(note)}</p><textarea id="cp-text" readonly style="min-height:130px" ${attrs}>${esc(text)}</textarea><div class="row"><button class="btn primary grow" id="cp-btn">Copy</button><a class="btn wa grow" href="${esc(waLink(text, phone))}" target="_blank" rel="noopener">${ICON.wa} WhatsApp</a></div>`);
+  sh.querySelector('#cp-btn').onclick = () => copy(text, 'Copied. Paste it in WhatsApp or WeChat.');
   return sh;
 }
 export function showMyLink(key) {
@@ -658,16 +660,17 @@ function changeMyCode() {
     try { await api('people', { action: 'myCode', code: a }); closeSheet(); toast('Your code is changed'); } catch (e) { err.textContent = e.message; }
   };
 }
-const PEOPLE_ORDER = ['owner', 'dev', 'dispatcher', 'client', 'passenger'];
+const PEOPLE_ORDER = ['owner', 'dev', 'dispatcher', 'passenger'];
 export function openPeople() {
   if (!isAdmin()) return;
-  const roles = S.me.role === 'dev' ? ['dispatcher', 'client', 'passenger', 'owner', 'dev'] : ['dispatcher', 'client', 'passenger'];
-  const sh = sheet('People and links', `
+  const roles = S.me.role === 'dev' ? ['dispatcher', 'passenger', 'owner', 'dev'] : ['dispatcher', 'passenger'];
+  const sh = sheet('Dispatchers and passengers', `
   <div class="box"><b>Add a person</b>
    <div class="two"><label class="fld"><span>Name</span><input id="pp-name" autocomplete="off"></label><label class="fld"><span>Role</span><select id="pp-role">${roles.map((r) => `<option value="${r}">${ROLE_LABEL[r]}</option>`).join('')}</select></label></div>
    <div class="two"><label class="fld"><span>Phone (optional)</span><input id="pp-phone" type="tel" inputmode="tel"></label><label class="fld"><span>City (optional)</span><input id="pp-city"></label></div>
    <div class="status err" id="pp-err"></div><button class="btn primary wide" id="pp-add">Add and make invite</button>
    <p class="dim" style="font-size:13px;margin-bottom:0">Each person gets their own private link and code. Nobody sees a list of other people.</p></div>
+  <p class="dim" style="font-size:14px">Clients are not added here: they come from the addresses you paste. See <button class="btn sm" data-act="clients">Clients</button>.</p>
   <div id="pp-list"></div>`, { onClose: () => LIVE.delete(draw) });
   const draw = () => {
     const box = sh.querySelector('#pp-list'); if (!box) return;
@@ -692,8 +695,8 @@ export function openPeople() {
   };
 }
 const canManage = (p) => S.me.role === 'dev' || (p.role !== 'dev' && p.role !== 'owner');
-function showInvite(p, key, pin) {
-  copyBox('Invite for ' + p.name, inviteText(p, key, pin), 'Send this to ' + p.name + '. The code is shown only now; you can always make a new one.', `data-key="${esc(key)}" data-pin="${esc(pin)}"`);
+export function showInvite(p, key, pin) {
+  copyBox('Invite for ' + p.name, inviteText(p, key, pin), 'Send this to ' + p.name + '. The code is shown only now; you can always make a new one.', `data-key="${esc(key)}" data-pin="${esc(pin)}"`, p.phone);
 }
 function managePerson(id) {
   const p = S.people.find((x) => x.id === id); if (!p || !canManage(p)) return;
@@ -750,7 +753,8 @@ export async function switchProfile() {
 
 /* =================== the client's own page: change address, see a slip =================== */
 export function clientEdit(p, reload) {
-  const sh = sheet('Delivery details', `
+  const sh = sheet('My delivery details', `
+  ${aiAllowedFor() ? '<label class="fld"><span>Paste or type your full address, AI fills the boxes below</span><textarea id="ce-raw" style="min-height:80px" placeholder="Name, phone, house, street, area, city, and TCS or Daewoo"></textarea></label><div class="row" style="margin-bottom:8px"><button class="btn dark" id="ce-read">Fill in</button><span class="status" id="ce-st"></span></div>' : ''}
   <div class="two"><label class="fld"><span>Receiver name</span><input id="ce-name" value="${esc(p.name)}"></label><label class="fld"><span>Phone</span><input id="ce-phone" type="tel" inputmode="tel" value="${esc(p.phone)}"></label></div>
   <label class="fld"><span>Address</span><textarea id="ce-address" style="min-height:70px">${esc(p.address)}</textarea></label>
   <div class="two"><label class="fld"><span>City</span><input id="ce-city" list="ce-cities" value="${esc(p.city)}"></label><label class="fld"><span>Other phone</span><input id="ce-phone2" value="${esc(p.phone2)}"></label></div>
@@ -759,11 +763,19 @@ export function clientEdit(p, reload) {
   <label class="fld"><span>Note for us</span><input id="ce-note" value="${esc(p.note)}"></label>
   <div class="status err" id="ce-err"></div><button class="btn primary wide" id="ce-save">Save</button>`);
   sh.querySelectorAll('[data-svc]').forEach((b) => (b.onclick = () => b.classList.toggle('on')));
+  const rd = sh.querySelector('#ce-read'); if (rd) rd.onclick = async () => {
+    const t = sh.querySelector('#ce-raw').value.trim(); if (!t) return; const st = sh.querySelector('#ce-st');
+    const put1 = (r) => { for (const k of ['name', 'phone', 'phone2', 'address', 'city', 'note']) if (r[k]) sh.querySelector('#ce-' + k).value = r[k]; if (r.service) sh.querySelectorAll('[data-svc]').forEach((b) => b.classList.toggle('on', r.service.includes(b.dataset.svc))); };
+    put1(fixUp(localParse(t), t)); st.textContent = 'Filled in. Checking…'; rd.disabled = true;
+    try { const { result } = await api('ai', { task: 'parse', text: t }); if (result && (result.address || result.name)) put1(fixUp(result, t)); st.textContent = 'Check each box, then save.'; }
+    catch (e) { st.textContent = 'Check each box, then save.'; }
+    rd.disabled = false;
+  };
   sh.querySelector('#ce-save').onclick = async () => {
     const v = (k) => sh.querySelector('#ce-' + k).value.trim(); const err = sh.querySelector('#ce-err'); const btn = sh.querySelector('#ce-save');
     btn.disabled = true; err.textContent = '';
     try {
-      await api('portal', { action: 'address', id: p.id, name: v('name'), phone: v('phone'), phone2: v('phone2'), address: v('address'), city: v('city'), note: v('note'), service: [...sh.querySelectorAll('[data-svc].on')].map((b) => b.dataset.svc).join(' / ') });
+      await api('portal', { action: 'address', name: v('name'), phone: v('phone'), phone2: v('phone2'), address: v('address'), city: v('city'), note: v('note'), service: [...sh.querySelectorAll('[data-svc].on')].map((b) => b.dataset.svc).join(' / ') });
       closeSheet(); toast('Saved. Thank you.'); reload();
     } catch (e) { err.textContent = e.offline ? 'No internet. Try again when connected.' : e.message; btn.disabled = false; }
   };
@@ -856,4 +868,128 @@ export function openExpense() {
     addExpense({ amount, cat: sh.querySelector('[data-cat].on')?.dataset.cat || 'Other', note: sh.querySelector('#ex-note').value.trim(), receipt: rc });
     closeSheet(); toast('Expense saved');
   };
+}
+
+const aiAllowedFor = () => S.me?.role === 'client' && navigator.onLine;
+
+/* =================== clients (owner) =================== */
+const sharedLink = () => `${location.origin}/#c`;
+const sharedText = () => `Assalam o Alaikum. See your parcels and keep your delivery address up to date here:\n${sharedLink()}\nOpen it and type your phone number.`;
+const personalLink = (key) => `${location.origin}/#p=${key}`;
+const personalText = (c, key) => `Assalam o Alaikum ${c.name || ''}. Your parcels from Amanat, and your delivery address:\n${personalLink(key)}\nThis link is only for you. Please do not forward it.`;
+export function openClients() {
+  if (!isAdmin()) return;
+  const sh = sheet('Clients', `
+  <div class="box"><b>One link for all clients</b><p class="dim" style="font-size:14px">Send this once, to everyone (a group, a broadcast or one by one). Each client types their phone number and, the first time, chooses a 4-digit code. They see only their own parcels.</p>
+   <div class="row"><button class="btn primary" id="cs-copy">Copy message</button><a class="btn wa" href="${esc(waLink(sharedText()))}" target="_blank" rel="noopener">${ICON.wa} WhatsApp</a></div>
+   <label class="tgl"><input type="checkbox" id="cs-on" ${S.cfg.sharedOff ? '' : 'checked'}> The shared link works (turn off to allow only personal links)</label></div>
+  <div class="search"><input id="cs-q" type="search" placeholder="Search name, phone, city" autocomplete="off"></div>
+  <div id="cs-list"></div>`, { onClose: () => LIVE.delete(draw) });
+  sh.querySelector('#cs-copy').onclick = () => copy(sharedText(), 'Copied. Paste it in WhatsApp or WeChat.');
+  sh.querySelector('#cs-on').onchange = (e) => { w(setDoc(D('config/main'), { sharedOff: !e.target.checked }, { merge: true }), 'config'); toast(e.target.checked ? 'The shared client link works' : 'Only personal links work now'); };
+  const draw = () => {
+    const box = sh.querySelector('#cs-list'); if (!box) return;
+    const q = (sh.querySelector('#cs-q')?.value || '').toLowerCase().trim();
+    const cs = clientList().filter((c) => !q || [c.name, c.phone, c.city].join(' ').toLowerCase().includes(q)).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    morph(box, cs.length ? cs.map((c) => `<div class="prow" data-key="cl-${c.id}"><span class="grow"><b>${esc(c.name || 'No name')}</b> <span class="dim">${esc(fmtPhone(c.phone))}</span>${c.disabled ? ' <span class="warn">turned off</span>' : ''}<br><span class="dim" style="font-size:13px">${c.address ? esc([c.address, c.city].filter(Boolean).join(', ')).slice(0, 80) : '<span class="warn">No address yet</span>'} · ${c.codeSet ? 'has opened the link' : 'has not opened the link yet'}${c.sharedOff ? ' · personal link only' : ''}${c.cEdit ? ' · <b>changed their details</b>' : ''}</span></span><button class="btn sm" data-cl="${c.id}">Manage</button></div>`).join('') : '<p class="dim">No clients yet. They are added when you paste addresses into a parcel.</p>');
+  };
+  LIVE.add(draw); draw();
+  sh.querySelector('#cs-q').addEventListener('input', draw);
+  sh.addEventListener('click', (ev) => { const b = ev.target.closest('[data-cl]'); if (b) manageClient(b.dataset.cl); });
+}
+function manageClient(id) {
+  const c = S.people.find((x) => x.id === id); if (!c) return;
+  const sh = sheet(c.name || 'Client', `
+  <div class="two"><label class="fld"><span>Name</span><input id="mc-name" value="${esc(c.name || '')}"></label><label class="fld"><span>Phone</span><input id="mc-phone" type="tel" value="${esc(c.phone || '')}"></label></div>
+  <label class="fld"><span>Address</span><textarea id="mc-address" style="min-height:64px">${esc(c.address || '')}</textarea></label>
+  <div class="two"><label class="fld"><span>City</span><input id="mc-city" value="${esc(c.city || '')}"></label><label class="fld"><span>Courier</span><input id="mc-service" value="${esc(c.service || '')}" placeholder="TCS"></label></div>
+  <button class="btn wide" id="mc-save">Save details</button>${c.cEdit ? '<p class="dim" style="font-size:13px">The client changed these details themselves.</p>' : ''}
+  <div class="box" style="margin-top:12px"><b>Personal link</b><p class="dim" style="font-size:14px">Opens the client's page straight away, without phone or code. Use it when the shared link is not right for this client.</p>
+   <div class="row"><button class="btn sm primary" id="mc-link">${c.key ? 'Send personal link' : 'Make personal link'}</button>${c.key ? '<button class="btn sm" id="mc-relink">New personal link</button>' : ''}</div></div>
+  <div class="box"><b>Shared link</b><p class="dim" style="font-size:14px">${c.codeSet ? 'This client has chosen a code.' : 'This client has not chosen a code yet.'}</p>
+   <label class="tgl"><input type="checkbox" id="mc-shared" ${c.sharedOff ? '' : 'checked'}> Can open with phone number and code</label>
+   ${c.codeSet ? '<button class="btn sm" id="mc-reset">Reset code (signs them out)</button>' : ''}</div>
+  <div class="row"><button class="btn" id="mc-view">View as ${esc(c.name || 'client')}</button><button class="btn ${c.disabled ? '' : 'danger'}" id="mc-off">${c.disabled ? 'Turn back on' : 'Turn off'}</button></div>
+  <div class="status err" id="mc-err"></div>`);
+  const Q = (x) => sh.querySelector(x), err = Q('#mc-err');
+  const run = async (fn) => { err.textContent = ''; if (!navigator.onLine) { err.textContent = 'This needs internet.'; return; } try { await fn(); } catch (e) { err.textContent = e.message; } };
+  if (c.cEdit) w(updateDoc(D('people/' + id), { cEdit: null }), 'client');
+  Q('#mc-save').onclick = () => {
+    const phone = Q('#mc-phone').value.trim();
+    w(updateDoc(D('people/' + id), { name: Q('#mc-name').value.trim(), phone, pk: phoneKey(phone), address: Q('#mc-address').value.trim(), city: Q('#mc-city').value.trim(), service: Q('#mc-service').value.trim() }), 'client');
+    closeSheet(); toast('Saved');
+  };
+  const sendLink = (key) => { closeSheet(); copyBox('Personal link for ' + (c.name || 'client'), personalText(c, key), 'Send this only to ' + (c.name || 'this client') + '.', `data-key="${esc(key)}"`, c.phone); };
+  Q('#mc-link').onclick = () => run(async () => { if (c.key) { sendLink(c.key); return; } const r = await api('people', { action: 'clientLink', pid: id }); c.key = r.key; sendLink(r.key); });
+  const rl = Q('#mc-relink'); if (rl) rl.onclick = () => run(async () => { if (!(await ask('Make a new personal link? The old one stops working.', 'New link'))) return; const r = await api('people', { action: 'clientLink', pid: id }); c.key = r.key; sendLink(r.key); });
+  Q('#mc-shared').onchange = (e) => { w(updateDoc(D('people/' + id), { sharedOff: !e.target.checked }), 'client'); toast(e.target.checked ? 'Shared link allowed for this client' : 'Personal link only for this client'); };
+  const rs = Q('#mc-reset'); if (rs) rs.onclick = () => run(async () => { if (!(await ask('Reset the code? The client chooses a new one next time.', 'Reset'))) return; await api('people', { action: 'clientReset', pid: id }); closeSheet(); toast('Code reset'); });
+  Q('#mc-off').onclick = () => run(async () => {
+    const off = !c.disabled;
+    if (off && !(await ask(`Turn off ${c.name || 'this client'}? They cannot open their page. Their parcels stay.`, 'Turn off'))) return;
+    w(updateDoc(D('people/' + id), { disabled: off, since: now() }), 'client'); closeSheet(); toast(off ? 'Turned off' : 'Turned back on');
+  });
+  Q('#mc-view').onclick = () => run(async () => { const r = await api('people', { action: 'viewAs', pid: id }); closeAll(); await enterViewAs(r.token, { ...c, role: 'client' }); });
+}
+
+/* =================== add people where the work is =================== */
+async function makePerson(role, name, phone) {
+  if (!name) throw new Error('Enter a name.');
+  if (!navigator.onLine) throw new Error('Adding a person needs internet.');
+  const r = await api('people', { action: 'create', name, role });
+  const p = { name, role, key: r.key, phone, city: '', note: '', disabled: false, at: now() };
+  w(setDoc(D('people/' + r.pid), p), 'person');
+  return { id: r.pid, ...p, pin: r.pin };
+}
+export async function newPassenger(name, phone) {
+  const p = await makePerson('passenger', name, phone);
+  addTrip(p); showInvite(p, p.key, p.pin);
+}
+export async function newDispatcher(name, phone) {
+  const p = await makePerson('dispatcher', name, phone);
+  const f = curFlight(); if (f) await setFlightDispatchers(f.id, [...(f.dids || []), p.id]);
+  showInvite(p, p.key, p.pin);
+}
+
+/* =================== demo data (test site only) =================== */
+function demoPhoto(color, label) {
+  const c = document.createElement('canvas'); c.width = 600; c.height = 600; const x = c.getContext('2d');
+  x.fillStyle = color; x.fillRect(0, 0, 600, 600); x.fillStyle = 'rgba(255,255,255,.88)'; x.fillRect(90, 200, 420, 200);
+  x.fillStyle = '#17212C'; x.font = 'bold 44px sans-serif'; x.textAlign = 'center'; x.fillText(label, 300, 315);
+  const t = document.createElement('canvas'); t.width = 240; t.height = 240; t.getContext('2d').drawImage(c, 0, 0, 240, 240);
+  return { full: c.toDataURL('image/jpeg', 0.7), thumb: t.toDataURL('image/jpeg', 0.55) };
+}
+export async function fillDemo() {
+  if (SPACE !== 'test' || !isAdmin()) return;
+  if (!navigator.onLine) { toast('Demo data needs internet.'); return; }
+  const t = toast('Making demo data…', { ms: 60000 });
+  try {
+    const fid = rid(), day = new Date(Date.now() + 86400000 + 5 * 3600000).toISOString().slice(0, 10);
+    await setDoc(D('flights/' + fid), { dids: [], label: 'DEMO PK 853', date: day, landAt: landAtOf(day, '08:00'), at: now(), by: S.me.uid, nextN: 1, bytes: 0 });
+    setFlight(fid);
+    const pas = await makePerson('passenger', 'Khalil (demo)', '0301 1112233');
+    const dis = await makePerson('dispatcher', 'Bilal (demo)', '0333 4445566');
+    await setFlightDispatchers(fid, [dis.id]);
+    const f = { id: fid, dids: [dis.id], landAt: landAtOf(day, '08:00') };
+    const tid = rid();
+    await setDoc(D('trips/' + tid), { fid, dids: f.dids, checked: 2, hand: 1, weight: 38, auto: 10, dueAt: f.landAt - 600000, gotChecked: 0, gotHand: 0, at: now() });
+    await setDoc(D('tripsPrivate/' + tid), { fid, dids: f.dids, pid: pas.id, name: pas.name, phone: pas.phone, released: false, rel: [], dueAt: f.landAt - 600000 });
+    const things = [['#C3362B', 'Shoes'], ['#2D6FC7', 'Phone case'], ['#1E8757', 'Seeds'], ['#D99A00', 'Charger'], ['#8440A8', 'Dress'], ['#12918F', 'Watch'], ['#C75B12', 'Toy car'], ['#4F6475', 'Drone']];
+    const ids = [];
+    for (const [k, [col, name]] of things.entries()) {
+      const ph = demoPhoto(col, name); const pid = rid(), iid = rid(); ids.push(iid);
+      await setDoc(D('photos/' + pid), { fid, d: ph.full, at: now() });
+      await setDoc(D('items/' + iid), { fid, dids: f.dids, n: null, tmp: k + 1, name: name.toLowerCase(), qty: name === 'Seeds' ? 5 : 1, photos: [{ p: pid, t: ph.thumb, s: ph.full.length }], groupId: '', at: now() + k, by: S.me.uid });
+    }
+    const people = [
+      { name: 'Abdullah Khan', phone: '0300 1234567', address: 'House 14, Street 7, Gulshan-e-Iqbal Block 5', city: 'Karachi', service: 'TCS' },
+      { name: 'Sana Bibi', phone: '0345 7654321', address: 'Mohallah Islamabad, near Jamia Masjid', city: 'Gujar Khan', service: 'Daewoo' },
+      { name: 'Hassan Ali', phone: '0321 5550001', address: '', city: 'Lahore', service: '' },
+    ];
+    newGroup({ ...people[0] }, ids.slice(0, 3)); await new Promise((r) => setTimeout(r, 300));
+    newGroup({ ...people[1] }, ids.slice(3, 5)); await new Promise((r) => setTimeout(r, 300));
+    newGroup({ ...people[2] }, ids.slice(5, 6));
+    t.remove(); toast('Demo flight ready. Items #7 and #8 are not in a parcel yet, so you can try sorting.', { ms: 6000 });
+    S.tab = 'flight'; schedule();
+  } catch (e) { t.remove(); toast('Demo data stopped: ' + (e.code || e.message)); }
 }

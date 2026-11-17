@@ -3,8 +3,8 @@
 //   GET  /api/portal                 passenger: flights, bags, dispatcher contact once released
 //                                    client: own parcels across flights, slips once released
 //   GET  /api/portal?slip=<parcel>   client: the full slip photo of an own, released parcel
-//   POST /api/portal {action:'address', id, name, phone, phone2, address, city, service, note}
-//                                    client: correct the address of an own parcel not yet booked
+//   POST /api/portal {action:'address', name, phone, phone2, address, city, service, note}
+//                                    client: their delivery details; also fixes their parcels not yet booked
 import { json, fail, body, verifyUser, validId, fsGet, fsWhere, fsMany, fsWhereIn, fsPatch, tripDue, openTrip } from '../../server/lib.js';
 import { SERVICES } from '../../src/parse.js';
 
@@ -35,6 +35,7 @@ async function passenger(request, env, me) {
 }
 
 async function client(request, env, me) {
+  const c = (await fsGet(request, env, 'people/' + me.pid)) || {};
   const privs = (await fsWhere(request, env, 'groupsPrivate', 'cid', me.pid)).slice(0, 90);
   const cfg = (await fsGet(request, env, 'config/main')) || {};
   const groups = await fsMany(request, env, privs.map((p) => 'groups/' + p.id));
@@ -52,12 +53,13 @@ async function client(request, env, me) {
       status: step || (f.landAt && f.landAt > Date.now() ? 'coming' : 'arrived'),
       name: p.name || '', phone: p.phone || '', phone2: p.phone2 || '', address: p.address || '', city: g.city || '', service: g.service || '', note: g.note || '',
       canEdit: canEdit(g),
-      items: items.filter((i) => i.groupId === p.id).sort((a, b) => (a.n || 1e9) - (b.n || 1e9)).map((i) => ({ n: i.n || null, name: i.name || '', qty: Number(i.qty) > 0 ? Number(i.qty) : 1, recv: i.recv || '', t: k < 20 ? safeThumb(i.photos?.[0]?.t) : '' })),
+      items: items.filter((i) => i.groupId === p.id).sort((a, b) => (a.n || 1e9) - (b.n || 1e9)).map((i) => ({ n: i.n || null, name: i.name || '', qty: Number(i.qty) > 0 ? Number(i.qty) : 1, t: k < 20 ? safeThumb(i.photos?.[0]?.t) : '' })),
       slip: slipOk && (g.tracking || g.receipt) ? { tracking: g.tracking || '', t: safeThumb(g.receipt?.t), has: !!g.receipt } : null,
       pickup,
     });
   }
-  return { role: 'client', name: me.name || '', parcels, trackUrls: cfg.trackUrls || {} };
+  const me2 = { name: c.name || '', phone: c.phone || '', phone2: c.phone2 || '', address: c.address || '', city: c.city || '', service: c.service || '', note: c.note || '' };
+  return { role: 'client', name: me.name || '', me: me2, parcels, trackUrls: cfg.trackUrls || {} };
 }
 
 export async function onRequestGet({ request, env }) {
@@ -79,13 +81,19 @@ export async function onRequestPost({ request, env }) {
   if (!me) return fail(401, 'Log in again.');
   if (me.viewAs) return fail(403, 'You are only viewing. Nothing was changed.');
   const b = await body(request);
-  if (me.role !== 'client' || b.action !== 'address' || !validId(b.id)) return fail(400, 'Not possible.');
-  const [p, g] = await Promise.all([fsGet(request, env, 'groupsPrivate/' + b.id), fsGet(request, env, 'groups/' + b.id)]);
-  if (!p || !g || p.cid !== me.pid) return fail(404, 'Unknown parcel.');
-  if (!canEdit(g)) return fail(409, 'This parcel is already booked, so the address cannot be changed here. Please message us.');
+  if (me.role !== 'client' || b.action !== 'address') return fail(400, 'Not possible.');
   const txt = (v, n) => String(v ?? '').replace(/[\u0000-\u001f]+/g, ' ').trim().slice(0, n);
   const service = txt(b.service, 60).split('/').map((s) => s.trim()).filter((s) => SERVICES.includes(s)).join(' / ');
-  await fsPatch(request, env, 'groupsPrivate/' + b.id, { name: txt(b.name, 80), phone: txt(b.phone, 30), phone2: txt(b.phone2, 80), address: txt(b.address, 400) });
-  await fsPatch(request, env, 'groups/' + b.id, { city: txt(b.city, 60), service, note: txt(b.note, 200), cEdit: Date.now() });
-  return json({ ok: true });
+  const d = { name: txt(b.name, 80), phone: txt(b.phone, 30), phone2: txt(b.phone2, 80), address: txt(b.address, 400), city: txt(b.city, 60), service, note: txt(b.note, 200) };
+  await fsPatch(request, env, 'people/' + me.pid, { ...d, cEdit: Date.now() });
+  // Parcels that are not booked yet take the new details too.
+  let n = 0;
+  for (const p of (await fsWhere(request, env, 'groupsPrivate', 'cid', me.pid)).slice(0, 40)) {
+    const g = await fsGet(request, env, 'groups/' + p.id);
+    if (!g || !canEdit(g)) continue;
+    await fsPatch(request, env, 'groupsPrivate/' + p.id, { name: d.name, phone: d.phone, phone2: d.phone2, address: d.address });
+    await fsPatch(request, env, 'groups/' + p.id, { city: d.city, service: d.service, cEdit: Date.now() });
+    n++;
+  }
+  return json({ ok: true, parcels: n });
 }
