@@ -1,11 +1,11 @@
 // Calls to our Cloudflare Pages Functions, and AI with offline fallback.
-import { S, auth, isStaff } from './core.js';
+import { S, auth, isStaff, realAuth } from './core.js';
 import { localParse, fixUp, splitChat } from './parse.js';
 
-export async function api(path, data, { authed = true } = {}) {
+export async function api(path, data, { authed = true, asReal = false } = {}) {
   const headers = { 'content-type': 'application/json' };
   if (authed) {
-    const u = auth?.currentUser; if (!u) throw Object.assign(new Error('Log in again.'), { status: 401 });
+    const u = (asReal ? realAuth() : auth)?.currentUser; if (!u) throw Object.assign(new Error('Log in again.'), { status: 401 });
     headers.authorization = 'Bearer ' + (await u.getIdToken());
   }
   let r;

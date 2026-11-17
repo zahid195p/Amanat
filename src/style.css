@@ -374,3 +374,30 @@ input[type=date]::-webkit-date-and-time-value,input[type=time]::-webkit-date-and
 .stepi.now{border:2px solid var(--sign)}
 .stepi.now .sn{background:var(--sign);color:var(--sign-ink)}
 .box.needs{border-color:var(--stop)}
+
+/* clients on a flight, earlier parcels */
+.rel.join{color:var(--info)}
+.svc-sec.left{border:2px dashed var(--sign);border-radius:12px;padding:6px 10px}
+.hits{display:flex;flex-direction:column;gap:4px;margin-top:6px}
+.hit{text-align:left;border:1px solid var(--line);background:var(--soft);border-radius:8px;padding:8px 10px;min-height:44px}
+
+.ownbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.ownbar .btn{flex:1 1 auto}
+
+/* phone width: keep the header readable and nothing spilling out */
+#hdr{gap:6px}
+#hdr .tag{min-width:72px}
+.face{max-width:110px;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:480px){
+  .tag-s{display:none}
+  .brand{font-size:19px}
+  .testtag{font-size:10px;padding:1px 4px;margin-left:4px}
+  .pill{font-size:11px;padding:2px 6px}
+  .pill.ok{font-size:0;padding:0;width:12px;height:12px;border-radius:50%;background:#3DBA82}
+  .two.dt{grid-template-columns:minmax(0,1fr)}
+  .trip .gc-top{flex-wrap:wrap}
+  .trip .gc-name{flex:1 1 100%}
+}
+#fl-pass{flex:1 1 140px;width:auto}
+.rel{line-height:1.3}
+.rel .btn{flex:none}

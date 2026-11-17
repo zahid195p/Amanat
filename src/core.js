@@ -39,7 +39,7 @@ export const S = {
   ready: false, configured: !!firebaseConfig.projectId, fatal: null,
   user: undefined, me: null, people: [], setup: null, real: null,
   cfg: {}, flights: [], flightsLoaded: false, flightsFromCache: true,
-  fid: null, items: [], groups: [], trips: [], expenses: [], itemsLoaded: false, portal: null,
+  fid: null, items: [], groups: [], trips: [], expenses: [], left: [], leftItems: [], itemsLoaded: false, portal: null,
   tab: 'photos', show: null, sel: new Set(), lastSel: null, q: '',
   gf: { city: '', service: '', status: 'open', sort: 'parcel' },
   uq: [], gridLimit: 120, hidden: new Set(), inflight: 0, pendingDocs: 0, online: navigator.onLine,
@@ -82,22 +82,30 @@ export const isDispatcher = () => S.me?.role === 'dispatcher';
 export const isStaff = () => isAdmin() || isDispatcher();
 export const can = (p) => isAdmin() || (isDispatcher() && !!DISPATCHER_CAN[p]);
 export const curFlight = () => S.flights.find((f) => f.id === S.fid) || null;
-export const groupById = (id) => (id ? S.groups.find((g) => g.id === id) : null);
+export const groupById = (id) => (id ? S.groups.find((g) => g.id === id) || S.left.find((g) => g.id === id) || null : null);
 export const gColor = (g) => GC[(g?.ci || 0) % GC.length];
 export const gTitle = (g) => (g ? (g.locked ? 'Receiver hidden' : g.name || 'No name yet') : '');
 // Parcel number, written on the box while packing: P1, P2… per flight ("P~3" until it syncs).
 export const pLabel = (g) => (!g ? '' : g.pn ? 'P' + g.pn : 'P~' + (g.ptmp || '?'));
 export const gLabel = (g) => (g ? `${pLabel(g)} ${gTitle(g)}` : '');
 export const visItems = () => S.items.filter((i) => !S.hidden.has(i.id));
-export const itemsIn = (gid) => visItems().filter((i) => i.groupId === gid);
+// A parcel's items, including those of earlier parcels sent together with it.
+export const itemsIn = (gid) => {
+  const own = visItems().filter((i) => i.groupId === gid);
+  const g = S.groups.find((x) => x.id === gid) || S.left.find((x) => x.id === gid);
+  const joined = g?.joined?.length ? S.leftItems.filter((i) => g.joined.includes(i.groupId)) : [];
+  if (!own.length && S.left.some((x) => x.id === gid)) return S.leftItems.filter((i) => i.groupId === gid);
+  return joined.length ? [...own, ...joined] : own;
+};
+export const flightLabel = (fid) => S.flights.find((f) => f.id === fid)?.label || 'an earlier flight';
 export const ungrouped = () => visItems().filter((i) => !groupById(i.groupId));
 export const active = () => S.groups.filter((g) => !g.done);
 export const sentGroups = () => S.groups.filter((g) => g.done);
 export const toSend = () => visItems().filter((i) => !groupById(i.groupId)?.done);
 export const qtyOf = (i) => (Number(i.qty) > 0 ? Number(i.qty) : 1);
 export const piecesIn = (gid) => itemsIn(gid).reduce((s, i) => s + qtyOf(i), 0);
-export const numLabel = (i) => (i.n ? '#' + i.n : '#~' + (i.tmp || '?'));
-export const itemLabel = (i) => (i.name || 'Item ' + numLabel(i)) + (Number(i.qty) > 1 ? ' ×' + i.qty : '');
+export const numLabel = (i) => (i.fid && S.fid && i.fid !== S.fid ? flightLabel(i.fid) + ' ' : '') + (i.n ? '#' + i.n : '#~' + (i.tmp || '?'));
+export const itemLabel = (i) => (i.fid && S.fid && i.fid !== S.fid && i.name ? flightLabel(i.fid) + ' · ' : '') + (i.name || 'Item ' + numLabel(i)) + (Number(i.qty) > 1 ? ' ×' + i.qty : '');
 export const profName = (uid) => S.people.find((p) => p.id === uid)?.name || (uid === S.me?.uid ? S.me?.name : '') || '';
 // Only genuine image data may go into the page (a crafted "photo" must never become code).
 export const safeImg = (t) => (typeof t === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(t) ? t : '');
@@ -238,12 +246,13 @@ function useEmulators(d, a) {
   connectAuthEmulator(a, `http://${location.hostname}:9099`, { disableWarnings: true });
 }
 let main = null, viewApp = null;
+export const realAuth = () => main?.auth || auth; // the person really logged in on this device
 let onMe = () => {};
 export const setOnMe = (fn) => (onMe = fn); // called when the person on screen changes (view as)
 /* ---------- view as ----------
    A second, separate sign-in with a read-only token for that person. The screen then shows
    exactly what the database rules let them see; nothing can be changed while viewing. */
-export async function enterViewAs(token, person) {
+export async function enterViewAs(token, person, acting = false) {
   flushAll(); commitUndos(); unsubscribeAll();
   viewApp = initializeApp(EMU ? { apiKey: 'demo', projectId: 'demo-amanat', appId: 'demo' } : firebaseConfig, 'view-' + Date.now());
   const vdb = initializeFirestore(viewApp, { localCache: memoryLocalCache() });
@@ -251,7 +260,8 @@ export async function enterViewAs(token, person) {
   if (EMU) useEmulators(vdb, vauth);
   await signInWithCustomToken(vauth, token);
   db = vdb; auth = vauth;
-  S.real = S.me; S.me = { uid: person.id, role: person.role, name: person.name, viewAs: true };
+  if (S.real) { S.me = S.real; S.real = null; }
+  S.real = S.me; S.me = { uid: person.id, role: person.role, name: person.name, viewAs: !acting, acting };
   resetData(); if (isStaff()) subscribeBase(); onMe(); schedule();
 }
 export async function exitViewAs() {
@@ -372,7 +382,8 @@ export function setFlight(fid) {
   flushAll(); commitUndos(); // B12
   S.fid = fid; S.subbed = fid; if (!S.me?.viewAs) lsSet('amanat3.fid', fid); S.sel.clear(); S.show = null; S.gridLimit = 120;
   unsubF.forEach((u) => u()); unsubF = []; S.items = []; S.groups = []; S.itemsLoaded = false;
-  gPub = []; gPriv = new Map(); tPub = []; tPriv = new Map(); S.trips = []; S.expenses = [];
+  gPub = []; gPriv = new Map(); tPub = []; tPriv = new Map(); S.trips = []; S.expenses = []; S.left = []; S.leftItems = [];
+  allPub = []; allPriv = new Map(); allItems = []; leftSeq++;
   if (fid) {
     // A dispatcher's queries must match the rules exactly ("only what I am on"), so they ask
     // for everything of theirs and the flight is picked out here.
@@ -380,13 +391,16 @@ export function setFlight(fid) {
     const q1 = (name, field = 'dids') => (boss ? query(C(name), where('fid', '==', fid)) : query(C(name), where(field, 'array-contains', S.me.uid)));
     const ofFlight = (q) => docsOf(q).filter((d) => d.fid === fid);
     unsubF.push(onSnapshot(q1('items'), { includeMetadataChanges: true }, (q) => {
+      if (!boss) { allItems = docsOf(q); mergeLeft(); }
       S.items = ofFlight(q).sort((a, b) => (a.n || 1e9) - (b.n || 1e9) || (a.at || 0) - (b.at || 0));
       S.itemsLoaded = true;
       for (const id of [...S.sel]) if (!S.items.some((i) => i.id === id)) S.sel.delete(id);
       countPending(); schedule(); numberItems();
     }, dbErr));
-    unsubF.push(onSnapshot(q1('groups'), { includeMetadataChanges: true }, (q) => { gPub = ofFlight(q); mergeGroups(); numberDocs('groups'); }, dbErr));
-    unsubF.push(onSnapshot(q1('groupsPrivate', 'rel'), { includeMetadataChanges: true }, (q) => { gPriv = new Map(ofFlight(q).map((d) => [d.id, d])); mergeGroups(); }, dbErr));
+    unsubF.push(onSnapshot(q1('groups'), { includeMetadataChanges: true }, (q) => { gPub = ofFlight(q); if (!boss) { allPub = docsOf(q); mergeLeft(); } mergeGroups(); numberDocs('groups'); }, dbErr));
+    unsubF.push(onSnapshot(q1('groupsPrivate', 'rel'), { includeMetadataChanges: true }, (q) => { gPriv = new Map(ofFlight(q).map((d) => [d.id, d])); if (!boss) { allPriv = new Map(docsOf(q).map((d) => [d.id, d])); mergeLeft(); } mergeGroups(); }, dbErr));
+    // Parcels not sent from earlier flights. The owner asks for them; a dispatcher already has them.
+    if (boss) unsubF.push(onSnapshot(query(C('groups'), where('done', '==', false)), (q) => { allPub = docsOf(q); loadLeftExtra(); }, dbErr));
     unsubF.push(onSnapshot(boss ? query(C('expenses'), where('fid', '==', fid)) : query(C('expenses'), where('by', '==', S.me.uid)), { includeMetadataChanges: true }, (q) => { S.expenses = ofFlight(q).sort((a, b) => (b.at || 0) - (a.at || 0)); schedule(); }, dbErr));
     unsubF.push(onSnapshot(q1('trips'), (q) => { tPub = ofFlight(q); mergeTrips(); }, dbErr));
     unsubF.push(onSnapshot(q1('tripsPrivate', 'rel'), (q) => { tPriv = new Map(ofFlight(q).map((d) => [d.id, d])); mergeTrips(); }, dbErr));
@@ -400,6 +414,56 @@ function mergeTrips() {
     .sort((a, b) => (a.at || 0) - (b.at || 0));
   schedule(); tick();
 }
+/* ---------- parcels left from earlier flights ----------
+   A parcel stays open until it is sent, whatever flight is open now. It can go on its own,
+   or "together" with the same client's parcel on this flight (joinedTo / joined). */
+let allPub = [], allPriv = new Map(), allItems = [], leftSeq = 0;
+const merge1 = (g, p) => { if (!p) return { ...g, locked: true }; const o = { ...g, released: !!p.released }; for (const k of PRIVATE_FIELDS) o[k] = p[k] ?? ''; o.cid = p.cid || ''; return o; };
+function mergeLeft() {
+  const fid = S.fid;
+  S.left = allPub.filter((g) => g.fid !== fid && !g.done && !g.deleting).map((g) => merge1(g, allPriv.get(g.id)))
+    .sort((a, b) => (a.at || 0) - (b.at || 0));
+  const ids = new Set(S.left.map((g) => g.id));
+  S.leftItems = allItems.filter((i) => ids.has(i.groupId));
+  schedule();
+}
+async function loadLeftExtra() {
+  const seq = ++leftSeq, fid = S.fid;
+  const left = allPub.filter((g) => g.fid !== fid && !g.done);
+  try {
+    const privs = await Promise.all(left.map((g) => getDoc(D('groupsPrivate/' + g.id)).then((d) => [g.id, d.exists() ? d.data() : null], () => [g.id, null])));
+    const ids = left.map((g) => g.id), its = [];
+    for (let k = 0; k < ids.length; k += 30) { const q = await getDocs(query(C('items'), where('groupId', 'in', ids.slice(k, k + 30)))); its.push(...docsOf(q)); }
+    if (seq !== leftSeq) return;
+    allPriv = new Map(privs); allItems = its; mergeLeft();
+  } catch (e) { console.warn('left', e); }
+}
+// Same client: by client id, or by phone number for parcels typed in by a dispatcher.
+const sameClient = (a, b) => (a.cid && a.cid === b.cid) || (phoneKey(a.phone) && phoneKey(a.phone) === phoneKey(b.phone));
+export const leftFor = (g) => S.left.filter((o) => !o.joinedTo && sameClient(o, g));
+export function joinParcels(gid, oids) {
+  const g = groupById(gid); if (!g || !oids.length) return;
+  for (const o of oids) upd('groups/' + o, { joinedTo: gid, joinedFid: g.fid });
+  upd('groups/' + gid, { joined: [...new Set([...(g.joined || []), ...oids])] });
+  logEv(`will send ${plural(oids.length, 'earlier parcel')} together with ${gLabel(g)}`);
+  toast(`Will be sent together with ${gLabel(g)}`);
+}
+export function unjoin(oid) {
+  const o = groupById(oid); if (!o?.joinedTo) return;
+  const g = groupById(o.joinedTo);
+  upd('groups/' + oid, { joinedTo: deleteField(), joinedFid: deleteField() });
+  if (g) upd('groups/' + g.id, { joined: (g.joined || []).filter((x) => x !== oid) });
+}
+// Ask first: a new parcel for a client who still has an unsent one.
+let askJoin = async () => false;
+export const setAskJoin = (fn) => (askJoin = fn);
+export async function offerJoin(gid) {
+  await new Promise((r) => setTimeout(r, 400));
+  const g = groupById(gid); if (!g) return;
+  const os = leftFor(g); if (!os.length) return;
+  if (await askJoin(g, os)) joinParcels(gid, os.map((o) => o.id));
+}
+
 // A group on screen = its open part + the receiver details, when this login may see them.
 let gPub = [], gPriv = new Map();
 function mergeGroups() {
@@ -472,6 +536,7 @@ export function newGroup(data, assignIds = []) {
   });
   logEv(`made parcel for ${clean.name || '(no name)'}`);
   if (assignIds.length) moveItems(assignIds, id, true);
+  if (!data.noAsk) offerJoin(id);
   return id;
 }
 /* ---------- clients ----------
@@ -568,7 +633,9 @@ export function deleteItems(ids) {
   });
 }
 export function setDone(gids, done) {
-  const gs = gids.map(groupById).filter(Boolean);
+  let gs = gids.map(groupById).filter(Boolean);
+  // Parcels joined to these go (or come back) with them.
+  gs = [...gs, ...gs.flatMap((g) => (g.joined || []).map(groupById).filter(Boolean))].filter((g, k, a) => a.indexOf(g) === k);
   const prev = gs.map((g) => [g.id, !!g.done, g.steps?.sent || null]);
   for (const g of gs) upd('groups/' + g.id, { done, 'steps.sent': done ? { at: now(), by: S.me.uid } : deleteField() });
   logEv(`${done ? 'marked sent' : 'marked not sent'}: ${gs.map(gTitle).join(', ')}`);
@@ -697,5 +764,6 @@ if (EMU) {
     del: (path) => res(deleteDoc(D(path))),
     upd: (path, data) => res(updateDoc(D(path), data)),
     ids: () => ({ items: S.items.map((i) => i.id), groups: S.groups.map((g) => g.id), fid: S.fid }),
+    S: () => S,
   };
 }

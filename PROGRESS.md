@@ -96,5 +96,16 @@ only their own part; contacts reach a device only after the owner releases them.
 - Every invite/message has Copy (for WeChat) and WhatsApp.
 - `tests/e2e.mjs`: 116 checks.
 
+### Redesign round 2 (2026-11-18)
+- A saved client gets a parcel on this flight from Parcels ("Add a saved client") or from Put in parcel.
+- Parcels left from earlier flights: listed at the top of Send; "Send together" (asked first) joins an
+  old parcel into the same client's parcel on this flight (`joinedTo` / `joined`); marking it sent sends both.
+- Links stay in the address bar (#k=, #c, #p=), so refresh and Home Screen icons keep working.
+- Test site: owner row on the Flight screen (Clients, Dispatchers and passengers, All flights, Try as…,
+  Fill with demo data). "Try as…" (developer, test only, `/api/people` `actAs`) becomes anyone on one device.
+- Demo data: two flights (last week with an unsent parcel, tomorrow), passenger, dispatcher, 4 clients.
+- Phone width: header keeps the flight name, date and time boxes stack, buttons do not cover text.
+- `tests/e2e.mjs`: 128 checks.
+
 ### Next
 - Switch live to version 2: migrate root collections into `apps/live`, deploy to project `amanat`.

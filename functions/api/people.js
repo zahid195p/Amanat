@@ -10,7 +10,7 @@
 //   clientReset {pid}                                   forget their code; they choose a new one, everyone is signed out
 //   clientEnsure {name, phone, …} -> {cid}              dispatcher or owner: find the client by phone, or add them
 // Only the developer can create or change a developer or an owner.
-import { json, fail, body, validId, validCode, hashCode, verifyUser, getProf, putProf, kvKey, randomId, randomPin, tokenFor, uidOf, revokeSessions, ROLES, fsGet, fsPatch, fsCreate, findClientByPhone } from '../../server/lib.js';
+import { json, fail, body, validId, validCode, hashCode, verifyUser, getProf, putProf, kvKey, randomId, randomPin, tokenFor, uidOf, revokeSessions, ROLES, fsGet, fsPatch, fsCreate, findClientByPhone, clientToken, envOf } from '../../server/lib.js';
 import { phoneKey } from '../../src/parse.js';
 
 export async function onRequestPost({ request, env }) {
@@ -37,6 +37,16 @@ export async function onRequestPost({ request, env }) {
     return json({ cid, created: true });
   }
   if (!me.boss) return fail(403, 'Only the owner can manage people.');
+  // Test site only, developer only: become anyone, with full rights, to try the app on one device.
+  if (b.action === 'actAs') {
+    if (envOf(request) !== 'test' || me.role !== 'dev') return fail(403, 'Only on the test site, for the developer.');
+    if (!validId(b.pid)) return fail(400, 'Unknown person.');
+    const c = await fsGet(request, env, 'people/' + b.pid);
+    if (c?.role === 'client') return json({ token: await clientToken(request, env, { ...c, id: b.pid }), role: 'client', name: c.name || '' });
+    const p = await getProf(request, env, b.pid);
+    if (!p || p.disabled) return fail(404, 'Unknown person.');
+    return json({ token: await tokenFor(request, env, b.pid, p), role: p.role, name: p.name });
+  }
   if (['clientLink', 'clientReset', 'viewAs'].includes(b.action) && validId(b.pid)) {
     const c = await fsGet(request, env, 'people/' + b.pid);
     if (c?.role === 'client') {

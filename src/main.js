@@ -7,7 +7,7 @@ import '@fontsource/barlow-condensed/700.css';
 import './style.css';
 import {
   S, $, $$, now, plural, isAdmin, can, groupById, active, toSend, ungrouped, visItems, toast, closeSheet, closeTop, layerCount, ask, choose,
-  schedule, setRender, DRAG, initFirebase, storageWorks, auth, onAuthStateChanged, signInWithCustomToken, subscribeBase, SPACE, ROLE_LABEL, isStaff, setRelease, exitViewAs, addTrip, updTrip, setTripRelease, delTrip, gotBag, saveLanding, setTickApi, setOnMe, setClientApi, setFlightDispatchers, delExpense, upd, setRecv, tick,
+  schedule, setRender, DRAG, initFirebase, storageWorks, auth, onAuthStateChanged, signInWithCustomToken, subscribeBase, SPACE, ROLE_LABEL, isStaff, setRelease, exitViewAs, addTrip, updTrip, setTripRelease, delTrip, gotBag, saveLanding, setTickApi, setOnMe, setClientApi, newGroup, joinParcels, unjoin, setAskJoin, pLabel, flightLabel, itemsIn, setFlightDispatchers, delExpense, upd, setRecv, tick,
   unsubscribeAll, setFlight, saveLater, moveItems, combine, deleteItems, setDone, svcKey, lsSet, waitForPendingWrites, db, numberItems, put, now as tnow,
 } from './core.js';
 import { render, shownItems } from './views.js';
@@ -15,7 +15,7 @@ import { handleFiles, retryUpload, dropUpload, clearUploads } from './images.js'
 import { api } from './api.js';
 import {
   openGroupSheet, openPickGroup, openViewer, viewerOpen, viewerNav, openCounter, openFlights, createFlight, downloadMD, downloadCSV,
-  deleteFlight, archiveFlight, openActivity, backup, restore, openMenu, openPeople, showMyLink, switchProfile, clientEdit, clientSlip, openClients, newPassenger, newDispatcher, fillDemo, openSlips, openExpense, openPhoto, openBulk, readShot, aiName, aiCheck,
+  deleteFlight, archiveFlight, openActivity, backup, restore, openMenu, openPeople, showMyLink, switchProfile, clientEdit, clientSlip, openClients, openTryAs, newPassenger, newDispatcher, fillDemo, openSlips, openExpense, openPhoto, openBulk, readShot, aiName, aiCheck,
   msgReceiver, copy,
 } from './sheets.js';
 
@@ -29,10 +29,11 @@ setRender(render);
 function readKey() {
   const h = location.hash + location.search;
   const pk = /[#&?]p=([A-Za-z0-9_-]{10,60})/.exec(h);
-  if (pk) { S.ckey = pk[1]; S.cmode = 'key'; history.replaceState(null, '', location.pathname); }
-  else if (/^#c$|[#&?]c(?:&|$)/.test(location.hash)) { S.cmode = 'phone'; history.replaceState(null, '', location.pathname); }
+  // The link stays in the address bar, so a refresh (or a Home Screen icon) opens the same page.
+  if (pk) { S.ckey = pk[1]; S.cmode = 'key'; }
+  else if (/^#c$|[#&?]c(?:&|$)/.test(location.hash)) S.cmode = 'phone';
   const m = /[#&?]k=([A-Za-z0-9_-]{10,60})/.exec(h);
-  if (m) { lsSet('amanat4.key', m[1]); S.cmode = ''; history.replaceState(null, '', location.pathname); }
+  if (m) { lsSet('amanat4.key', m[1]); S.cmode = ''; }
   try { S.key = localStorage.getItem('amanat4.key') || ''; } catch (e) { S.key = m ? m[1] : ''; }
 }
 async function boot() {
@@ -72,6 +73,8 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 if (window.__t) window.__t.api = api;
 setTickApi((fid) => api('tick', { fid }));
 setClientApi((d) => api('people', d));
+// Ask first before sending an earlier parcel together with a new one.
+setAskJoin((g, os) => choose('Send together?', `${g.name || 'This client'} still has ${os.map((o) => `${pLabel(o)} from ${flightLabel(o.fid)} (${itemsIn(o.id).length} items)`).join(', ')}, not sent yet. Send it in the same box as ${pLabel(g)}?`, [{ label: 'No, keep separate', v: false }, { label: 'Send together', v: true, cls: 'primary' }]));
 setOnMe(() => loadPortal());
 // Before login: is this a fresh install (setup), and whose link is this?
 async function whoAmI() {
@@ -164,12 +167,16 @@ const ACT = {
   clientStart: () => { S.cmode = 'phone'; S.cstate = ''; S.loginErr = ''; schedule(); },
   clientBack: () => { S.cstate = ''; S.loginErr = ''; schedule(); },
   haveLink: () => { S.setup = null; schedule(); },
-  otherLink: () => { S.cmode = ''; S.key = ''; S.who = null; lsSet('amanat4.key', null); whoAmI(); },
+  otherLink: () => { S.cmode = ''; history.replaceState(null, '', location.pathname); S.key = ''; S.who = null; lsSet('amanat4.key', null); whoAmI(); },
   login: () => doLogin(),
   setup: () => doSetup(),
   menu: () => openMenu(),
   switchFace: () => switchProfile(),
   people: () => openPeople(),
+  tryAs: () => openTryAs(),
+  addClientParcel: (el) => { const c = S.people.find((p) => p.id === el.dataset.id); if (!c) return; S.cq = ''; newGroup({ name: c.name, phone: c.phone, phone2: c.phone2, address: c.address, city: c.city, service: c.service, cid: c.id }, sel()); toast(`${c.name || 'Client'} added to this flight`); },
+  join: (el) => joinParcels(el.dataset.id, [el.dataset.o]),
+  unjoin: (el) => unjoin(el.dataset.id),
   goto: (el) => document.getElementById(el.dataset.v)?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
   newPassenger: (el) => busy(el, () => newPassenger($('#np-name').value.trim(), $('#np-phone').value.trim())),
   newDispatcher: (el) => busy(el, () => newDispatcher($('#nd-name').value.trim(), $('#nd-phone').value.trim())),
@@ -293,6 +300,7 @@ document.addEventListener('input', (ev) => {
   if (t.dataset.name) saveLater('items/' + t.dataset.name, { name: t.value.trim() });
   if (t.dataset.qty) { const v = parseInt(t.value, 10); saveLater('items/' + t.dataset.qty, { qty: v > 0 ? v : null }); }
   if (t.dataset.q !== undefined && t.id === 'q') { S.q = t.value; S.gridLimit = 120; schedule(); }
+  if (t.dataset.cq !== undefined) { S.cq = t.value; schedule(); }
 });
 document.addEventListener('change', (ev) => {
   if (ev.target.matches('input[data-up]')) { const fs = ev.target.files; if (fs && fs.length) handleFiles(fs); ev.target.value = ''; }

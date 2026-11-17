@@ -6,7 +6,7 @@ import {
   closeAll, choose, ask, pushLayer, closeTop, schedule, upd, put, del, w, D, saveLater, flushAll, logEv, newGroup, saveBook, lookupBook,
   moveItems, combine, clientByPhone, ensureClient, clientList, deleteItems, setDone, setStep, setFlight, nextTmp, getDoc, getDocs, collection, query, where, writeBatch,
   increment, deleteField, db, STEPS, DEFAULT_WA, DEFAULT_TRACK, FREE_BYTES, setDoc, updateDoc, C, safeImg,
-  commitUndos, auth, signOut, unsubscribeAll, ROLE_LABEL, PRIVATE_FIELDS, landAtOf, addTrip, RECV, setRecv, AUTO_CHOICES, EXP_CATS, addExpense, isDispatcher, setFlightDispatchers, enterViewAs, SPACE,
+  commitUndos, auth, signOut, unsubscribeAll, exitViewAs, ROLE_LABEL, PRIVATE_FIELDS, landAtOf, addTrip, RECV, setRecv, AUTO_CHOICES, EXP_CATS, addExpense, isDispatcher, setFlightDispatchers, enterViewAs, SPACE,
 } from './core.js';
 import { FIELDS, SERVICES, CITIES, phoneKey, isMobile, waNumber, findPhones, localParse, fixUp, matchSlips } from './parse.js';
 import { fullPhoto, cachePhoto, compressOne, handleFiles } from './images.js';
@@ -234,8 +234,21 @@ export async function aiCheck(gid) {
 /* =================== pick group =================== */
 export function openPickGroup(ids) {
   // B4: sent groups are not offered.
-  const sh = sheet('Put in a parcel', `<button class="btn primary wide" data-pg="__new" style="margin-bottom:10px">+ New parcel (paste address)</button><div class="gpick">${active().map((g) => `<button data-pg="${g.id}" style="--g:${gColor(g)}"><i></i>${esc(gLabel(g))} <span class="dim" style="font-weight:500">${esc(g.service || '')}</span></button>`).join('')}</div>`);
+  const sh = sheet('Put in a parcel', `<button class="btn primary wide" data-pg="__new" style="margin-bottom:10px">+ New parcel (paste address)</button>${isAdmin() ? '<label class="fld"><span>Or a saved client</span><input id="pg-q" type="search" placeholder="Type a name, phone or city" autocomplete="off"></label><div class="hits" id="pg-hits"></div>' : ''}<div class="gpick">${active().map((g) => `<button data-pg="${g.id}" style="--g:${gColor(g)}"><i></i>${esc(gLabel(g))} <span class="dim" style="font-weight:500">${esc(g.service || '')}</span></button>`).join('')}</div>`);
   sh.querySelectorAll('[data-pg]').forEach((b) => (b.onclick = () => { closeSheet(); if (b.dataset.pg === '__new') openGroupSheet(null, ids); else moveItems(ids, b.dataset.pg); }));
+  const q = sh.querySelector('#pg-q'); if (q) q.addEventListener('input', () => {
+    const t = q.value.toLowerCase().trim(); const on = new Set(S.groups.map((g) => g.cid).filter(Boolean));
+    const hits = t ? clientList().filter((c) => !c.disabled && [c.name, c.phone, c.city].join(' ').toLowerCase().includes(t)).slice(0, 8) : [];
+    sh.querySelector('#pg-hits').innerHTML = hits.map((c) => `<button class="hit" data-cl="${c.id}"><b>${esc(c.name || 'No name')}</b> <span class="dim">${esc([fmtPhone(c.phone), c.city].filter(Boolean).join(', '))}${on.has(c.id) ? ' · already on this flight' : ''}</span></button>`).join('') || (t ? '<p class="dim">No saved client matches.</p>' : '');
+  });
+  sh.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-cl]'); if (!b) return;
+    const c = S.people.find((p) => p.id === b.dataset.cl); if (!c) return;
+    closeSheet();
+    const have = S.groups.find((g) => g.cid === c.id && !g.done);
+    if (have) moveItems(ids, have.id);
+    else { newGroup({ name: c.name, phone: c.phone, phone2: c.phone2, address: c.address, city: c.city, service: c.service, cid: c.id }, ids); toast(`New parcel for ${c.name || 'the client'}`); }
+  });
 }
 
 /* =================== viewer (swipe, pinch, arrows) =================== */
@@ -609,7 +622,7 @@ export function openMenu() {
   const c = S.cfg;
   const sh = sheet('Menu', `
   <div class="box"><div class="row"><span class="grow"><b>${esc(S.me.name)}</b> <span class="dim">${ROLE_LABEL[S.me.role]}</span></span><button class="btn sm" data-act="switchFace">Log out</button></div>
-   <div class="row" style="margin-top:8px"><button class="btn sm" id="mn-link">My private link</button><button class="btn sm" id="mn-code">Change my code</button>${isAdmin() ? '<button class="btn sm primary" data-act="clients">Clients</button><button class="btn sm" data-act="people">Dispatchers and passengers</button>' : ''}</div></div>
+   <div class="row" style="margin-top:8px"><button class="btn sm" id="mn-link">My private link</button><button class="btn sm" id="mn-code">Change my code</button>${isAdmin() ? '<button class="btn sm primary" data-act="clients">Clients</button><button class="btn sm" data-act="people">Dispatchers and passengers</button>' : ''}${(S.real || S.me).role === 'dev' && SPACE === 'test' ? '<button class="btn sm" data-act="tryAs">Try the app as…</button>' : ''}</div></div>
   <div class="box"><b>AI helper</b><p class="dim" style="font-size:14px">AI reads pasted addresses and screenshots and suggests item names. It uses Google Gemini's free tier, where Google may use what is sent to improve its products. The basic reader always works without AI.</p>
    <label class="tgl"><input type="checkbox" id="mn-ailocal" ${S.aiLocalOff ? '' : 'checked'}> Use AI on this device</label>
    ${isAdmin() ? `<label class="tgl"><input type="checkbox" id="mn-ai" ${c.aiOff ? '' : 'checked'}> AI on for everyone</label>` : ''}</div>
@@ -962,34 +975,68 @@ function demoPhoto(color, label) {
 export async function fillDemo() {
   if (SPACE !== 'test' || !isAdmin()) return;
   if (!navigator.onLine) { toast('Demo data needs internet.'); return; }
-  const t = toast('Making demo data…', { ms: 60000 });
+  if (!(await ask('Make two demo flights with a passenger, a dispatcher, clients, items and parcels?', 'Make demo data'))) return;
+  const t = toast('Making demo data…', { ms: 90000 });
   try {
-    const fid = rid(), day = new Date(Date.now() + 86400000 + 5 * 3600000).toISOString().slice(0, 10);
-    await setDoc(D('flights/' + fid), { dids: [], label: 'DEMO PK 853', date: day, landAt: landAtOf(day, '08:00'), at: now(), by: S.me.uid, nextN: 1, bytes: 0 });
-    setFlight(fid);
-    const pas = await makePerson('passenger', 'Khalil (demo)', '0301 1112233');
-    const dis = await makePerson('dispatcher', 'Bilal (demo)', '0333 4445566');
-    await setFlightDispatchers(fid, [dis.id]);
-    const f = { id: fid, dids: [dis.id], landAt: landAtOf(day, '08:00') };
-    const tid = rid();
-    await setDoc(D('trips/' + tid), { fid, dids: f.dids, checked: 2, hand: 1, weight: 38, auto: 10, dueAt: f.landAt - 600000, gotChecked: 0, gotHand: 0, at: now() });
-    await setDoc(D('tripsPrivate/' + tid), { fid, dids: f.dids, pid: pas.id, name: pas.name, phone: pas.phone, released: false, rel: [], dueAt: f.landAt - 600000 });
-    const things = [['#C3362B', 'Shoes'], ['#2D6FC7', 'Phone case'], ['#1E8757', 'Seeds'], ['#D99A00', 'Charger'], ['#8440A8', 'Dress'], ['#12918F', 'Watch'], ['#C75B12', 'Toy car'], ['#4F6475', 'Drone']];
-    const ids = [];
-    for (const [k, [col, name]] of things.entries()) {
-      const ph = demoPhoto(col, name); const pid = rid(), iid = rid(); ids.push(iid);
-      await setDoc(D('photos/' + pid), { fid, d: ph.full, at: now() });
-      await setDoc(D('items/' + iid), { fid, dids: f.dids, n: null, tmp: k + 1, name: name.toLowerCase(), qty: name === 'Seeds' ? 5 : 1, photos: [{ p: pid, t: ph.thumb, s: ph.full.length }], groupId: '', at: now() + k, by: S.me.uid });
-    }
-    const people = [
-      { name: 'Abdullah Khan', phone: '0300 1234567', address: 'House 14, Street 7, Gulshan-e-Iqbal Block 5', city: 'Karachi', service: 'TCS' },
-      { name: 'Sana Bibi', phone: '0345 7654321', address: 'Mohallah Islamabad, near Jamia Masjid', city: 'Gujar Khan', service: 'Daewoo' },
-      { name: 'Hassan Ali', phone: '0321 5550001', address: '', city: 'Lahore', service: '' },
+    const dayOf = (d) => new Date(Date.now() + d * 86400000 + 5 * 3600000).toISOString().slice(0, 10);
+    const pas = await makePerson('passenger', 'Khalil (demo)', '0301 7005005');
+    const dis = await makePerson('dispatcher', 'Bilal (demo)', '0333 7006006');
+    const clients = [
+      { name: 'Abdullah Khan', phone: '0300 7001001', address: 'House 14, Street 7, Gulshan-e-Iqbal Block 5', city: 'Karachi', service: 'TCS' },
+      { name: 'Sana Bibi', phone: '0345 7002002', address: 'Mohallah Islamabad, near Jamia Masjid', city: 'Gujar Khan', service: 'Daewoo' },
+      { name: 'Hassan Ali', phone: '0321 7003003', address: '', city: 'Lahore', service: '' },
+      { name: 'Imran Shah', phone: '0312 7004004', address: 'Khyber Bazaar, Shop 4', city: 'Peshawar', service: 'Daewoo' },
     ];
-    newGroup({ ...people[0] }, ids.slice(0, 3)); await new Promise((r) => setTimeout(r, 300));
-    newGroup({ ...people[1] }, ids.slice(3, 5)); await new Promise((r) => setTimeout(r, 300));
-    newGroup({ ...people[2] }, ids.slice(5, 6));
-    t.remove(); toast('Demo flight ready. Items #7 and #8 are not in a parcel yet, so you can try sorting.', { ms: 6000 });
+    const cids = clients.map((c) => ensureClient(c));
+    async function flight(label, day, things, parcels, sentIdx) {
+      const fid = rid(), landAt = landAtOf(dayOf(day), '08:00');
+      await setDoc(D('flights/' + fid), { dids: [dis.id], label, date: dayOf(day), landAt, at: now(), by: S.me.uid, nextN: things.length + 1, nextP: parcels.length + 1, bytes: 0 });
+      const tid = rid();
+      await setDoc(D('trips/' + tid), { fid, dids: [dis.id], checked: 2, hand: 1, weight: 38, auto: 10, dueAt: landAt - 600000, gotChecked: day < 0 ? 2 : 0, gotHand: day < 0 ? 1 : 0, at: now() });
+      await setDoc(D('tripsPrivate/' + tid), { fid, dids: [dis.id], pid: pas.id, name: pas.name, phone: pas.phone, released: day < 0, rel: day < 0 ? [dis.id] : [], dueAt: landAt - 600000 });
+      const ids = [];
+      for (const [k, [col, name, qty]] of things.entries()) {
+        const ph = demoPhoto(col, name); const pid = rid(), iid = rid(); ids.push(iid);
+        await setDoc(D('photos/' + pid), { fid, d: ph.full, at: now() });
+        await setDoc(D('items/' + iid), { fid, dids: [dis.id], n: k + 1, name: name.toLowerCase(), qty: qty || 1, photos: [{ p: pid, t: ph.thumb, s: ph.full.length }], groupId: '', at: now() + k, by: S.me.uid });
+      }
+      for (const [k, [ci, from, to]] of parcels.entries()) {
+        const c = clients[ci], gid = rid(), done = sentIdx.includes(k);
+        await setDoc(D('groups/' + gid), { fid, dids: [dis.id], ci: k, pn: k + 1, ptmp: k + 1, city: c.city, service: c.service, note: '', done, at: now() + k, by: S.me.uid, aiPending: false, tracking: done ? 'TCS' + (500000 + k) : '', weight: null, charges: done ? 450 : null, steps: { arrived: { at: now(), by: S.me.uid }, ...(done ? { sent: { at: now(), by: dis.id } } : {}) }, packed: {} });
+        await setDoc(D('groupsPrivate/' + gid), { fid, dids: [dis.id], name: c.name, phone: c.phone, phone2: '', address: c.address, raw: '', cid: cids[ci], released: day < 0, rel: day < 0 ? [dis.id] : [] });
+        for (const iid of ids.slice(from, to)) await updateDoc(D('items/' + iid), { groupId: gid });
+      }
+      return fid;
+    }
+    // Last week: Abdullah's seed packets were not sent; Sana's parcel went.
+    await flight('DEMO PK 851', -7, [['#1E8757', 'Seeds', 6], ['#8440A8', 'Dress']], [[0, 0, 1], [1, 1, 2]], [1]);
+    // Tomorrow: more for Abdullah (try "Send together"), Sana, Hassan (no address yet), and two items not sorted.
+    const fid = await flight('DEMO PK 853', 1, [['#C3362B', 'Shoes'], ['#2D6FC7', 'Phone case', 2], ['#1E8757', 'Seeds', 4], ['#D99A00', 'Charger'], ['#12918F', 'Watch'], ['#C75B12', 'Toy car'], ['#4F6475', 'Drone']], [[0, 0, 3], [1, 3, 4], [2, 4, 5]], []);
+    setFlight(fid);
+    t.remove(); toast('Demo ready: two flights. On Send you will see Abdullah\'s parcel left from last week. Items 6 and 7 are not sorted yet.', { ms: 8000 });
     S.tab = 'flight'; schedule();
   } catch (e) { t.remove(); toast('Demo data stopped: ' + (e.code || e.message)); }
+}
+
+/* =================== test site: try the app as anyone =================== */
+export function openTryAs() {
+  const real = S.real || S.me;
+  if (SPACE !== 'test' || real?.role !== 'dev') return;
+  const list = (S.real ? S.realPeople : S.people) || S.people;
+  const groupsOf = [['owner', 'Owner'], ['dispatcher', 'Dispatchers'], ['passenger', 'Passengers'], ['client', 'Clients']];
+  const sh = sheet('Try the app as…', `<p class="dim">Test site only. You become that person on this device, with their rights, without their code. "Back to me" returns to you.</p>
+  ${S.real ? '<button class="btn primary wide" data-ta="__me" style="margin-bottom:10px">Back to me (developer)</button>' : ''}
+  ${groupsOf.map(([r, l]) => { const ps = list.filter((p) => p.role === r && !p.disabled); return ps.length ? `<h3 class="pp-h">${l}</h3><div class="chips">${ps.map((p) => `<button class="chip" data-ta="${p.id}">${esc(p.name || 'No name')}</button>`).join('')}</div>` : ''; }).join('')}`);
+  sh.addEventListener('click', async (ev) => {
+    const b = ev.target.closest('[data-ta]'); if (!b) return;
+    if (b.dataset.ta === '__me') { closeAll(); exitViewAs(); return; }
+    const p = list.find((x) => x.id === b.dataset.ta); if (!p) return;
+    b.disabled = true;
+    try {
+      if (!S.real) S.realPeople = S.people;
+      const r = await api('people', { action: 'actAs', pid: p.id }, { asReal: true });
+      closeAll(); await enterViewAs(r.token, { ...p, role: r.role }, true);
+      toast(`You are now ${p.name}`);
+    } catch (e) { toast(e.message); b.disabled = false; }
+  });
 }

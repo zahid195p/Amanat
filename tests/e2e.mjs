@@ -80,7 +80,7 @@ await o.fill('#pin-in', '000000'); await o.click('[data-act=login]');
 ok(await until(o, () => /not right/.test(document.querySelector('#login-err')?.textContent || '')), 'wrong code refused');
 await o.fill('#pin-in', owner.pin); await o.click('[data-act=login]');
 ok(await until(o, () => /No flight yet/.test(document.body.innerText)), 'owner logged in');
-ok(await o.evaluate(() => !location.hash), 'the key is removed from the address bar');
+ok(await o.evaluate(() => location.hash.startsWith('#k=')), 'the link stays in the address bar, so a refresh stays on the same page');
 await o.click('[data-act=flights]'); await o.fill('#nf-label', 'PK 853'); await o.click('[data-act=createFlight]');
 ok(await until(o, () => /PK 853/.test(document.querySelector('#hdr').innerText)), 'flight created');
 ok(await until(o, () => /No passengers yet/.test(document.body.innerText)), 'a new flight opens on the Flight tab');
@@ -385,6 +385,44 @@ await b.click('[data-act=tab][data-v=service]'); await b.click('[data-act=counte
 ok(await until(b, () => /^P\d+$/.test(document.querySelector('.counter .c-pno')?.textContent || '')), 'counter opens with big parcel number');
 await b.goBack();
 ok(await until(b, () => !document.querySelector('.counter')) && (await b.evaluate(() => location.href.startsWith('http://localhost:8788'))), 'back closes the counter and stays in the app');
+
+/* ---------- 9b. demo data, parcels left from an earlier flight, saved clients, try as ---------- */
+await o.click('[data-act=tab][data-v=flight]');
+ok(await until(o, () => /Clients/.test(document.querySelector('.ownbar')?.innerText || '') && /Fill with demo data/.test(document.querySelector('.ownbar')?.innerText || '')), 'Flight screen: main buttons in one row, demo data on the test site');
+await o.click('.ownbar [data-act=demo]'); await o.click('[data-ch="1"]');
+ok(await until(o, () => /Demo ready/.test(document.querySelector('#toasts').innerText) && /DEMO PK 853/.test(document.querySelector('#hdr').innerText), null, 60000), 'demo data: two flights made in one tap');
+await o.click('[data-act=tab][data-v=service]');
+ok(await until(o, () => /Left from earlier flights/.test(document.body.innerText) && /From DEMO PK 851, not sent yet/.test(document.body.innerText), null, 20000), 'Send: Abdullah\'s unsent parcel from last week is listed at the top');
+await o.click('[data-key="sec-left"] .parcel:has-text("DEMO PK 851") [data-act=join]');
+ok(await until(o, () => /Also in this box: P1 from DEMO PK 851/.test(document.body.innerText) && !/DEMO PK 851/.test(document.querySelector('[data-key="sec-left"]')?.innerText || ''), null, 20000), '"Send together": the old parcel goes in the same box as the new one');
+ok(await o.evaluate(() => /DEMO PK 851 · seeds ×6/.test(document.body.innerText)), 'the old items show inside the new parcel with their flight name');
+await o.click('[data-act=tab][data-v=groups]');
+await o.fill('#cq', 'Imran');
+ok(await until(o, () => /Imran Shah/.test(document.querySelector('.hits')?.innerText || '')), 'Parcels: a saved client is found by name');
+await o.click('[data-act=addClientParcel]');
+if (await until(o, () => /Send together\?/.test(document.body.innerText), null, 3000)) { ok(true, 'asked first: this client still has an unsent parcel'); await o.click('[data-ch="0"]'); }
+ok(await until(o, () => [...document.querySelectorAll('.gcard')].some((c) => /Imran Shah/.test(c.innerText) && /Khyber Bazaar/.test(c.innerText)), null, 15000), 'adding a saved client makes his parcel on this flight with his saved address');
+await o.click('[data-act=tab][data-v=photos]'); await o.click('[data-act=show][data-v=un]');
+await until(o, () => document.querySelectorAll('.card').length === 2);
+await o.click('.card:nth-child(1) .ph'); await o.click('#selbar [data-act=selToGroup]');
+await o.fill('#pg-q', 'Hassan');
+ok(await until(o, () => /already on this flight/.test(document.querySelector('#pg-hits')?.innerText || '')), 'Put in parcel: saved clients can be searched there too');
+await o.click('#pg-hits [data-cl]');
+ok(await until(o, () => document.querySelectorAll('.card').length === 1, null, 15000), 'the item goes into that client\'s parcel');
+// the developer tries the app as the demo dispatcher, on the same device
+await a.reload(); await until(a, () => !!document.querySelector('#hdr .face'), null, 20000);
+await a.click('[data-act=menu]'); await a.click('[data-act=tryAs]');
+await a.click('[data-ta]:has-text("Bilal (demo)")');
+ok(await until(a, () => /trying the app as Bilal \(demo\)/.test(document.body.innerText), null, 20000), 'Try as: the developer becomes the demo dispatcher without his code');
+await a.click('[data-act=tryAs]'); await a.click('[data-ta]:has-text("Abdullah Khan")');
+ok(await until(a, () => /trying the app as Abdullah Khan/.test(document.body.innerText) && /Hello Abdullah Khan/.test(document.body.innerText), null, 20000), 'Try as: then the demo client, straight to his page');
+await a.click('[data-act=exitView]');
+ok(await until(a, () => !/trying the app as/.test(document.body.innerText) && !!document.querySelector('.tabs, #tabs:not([hidden])'), null, 20000), 'Back to me');
+// phone-size look at the owner's screens
+const [OP, op] = await open(375, 760, true);
+await login(op, owner.key, owner.pin); await until(op, () => !!document.querySelector('#tabs:not([hidden])'), null, 20000);
+for (const t of ['flight', 'groups', 'service']) { await op.click(`[data-act=tab][data-v=${t}]`); await wait(800); ok(await op.evaluate(() => document.documentElement.scrollWidth <= 375), `owner ${t} screen fits a 375px phone`); await op.screenshot({ path: `${shots}/op-${t}.png`, fullPage: true }); }
+await OP.close();
 
 /* ---------- 10. turning a person off ---------- */
 await a.click('[data-act=menu]'); await a.click('[data-act=people]');
